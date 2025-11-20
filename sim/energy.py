@@ -164,14 +164,9 @@ class FreeEnergy:
         return bulk + grad_term
 
     def positive_strain_energy(self, strain: Array, stiffness: Array) -> Array:
-        strain_pos = np.zeros_like(strain)
-        flat = strain.reshape(-1, 3, 3)
-        flat_pos = strain_pos.reshape(-1, 3, 3)
-        for idx in range(flat.shape[0]):
-            vals, vecs = np.linalg.eigh(flat[idx])
-            s_pos = sum(max(vals[i], 0.0) * np.outer(vecs[:, i], vecs[:, i]) for i in range(3))
-            flat_pos[idx] = s_pos
-        strain_pos = flat_pos.reshape(strain.shape)
+        vals, vecs = np.linalg.eigh(strain)
+        vals_pos = np.clip(vals, 0.0, None)
+        strain_pos = np.einsum("...ik,...k,...jk->...ij", vecs, vals_pos, vecs, optimize=True)
         return 0.5 * np.einsum("...ij,...ijkl,...kl->...", strain_pos, stiffness, strain_pos, optimize=True)
 
     def pfc_energy(self, psi: Array) -> Array:
