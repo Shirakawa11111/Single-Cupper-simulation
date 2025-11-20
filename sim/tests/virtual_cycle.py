@@ -31,6 +31,7 @@ class CycleResult:
 def run_virtual_cycles(
     cycles: int = 10,
     max_strain: float = 0.01,
+    strain_steps: int = 400,
     csv_output: Path | None = None,
     data_output: Path | None = None,
     dump_dir: Path | None = None,
@@ -46,7 +47,7 @@ def run_virtual_cycles(
     structure = builder.build(seed=42)
     mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
     pfc = PFCEvolver(grid, pfc_params, dt=5e-3)
-    solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.001)
+    solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.1)
     solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg)
     solver.initialize_state(structure.orientation, seed=42)
     for key, value in structure.fields.items():
@@ -54,10 +55,17 @@ def run_virtual_cycles(
     solver.state["history"] = np.zeros_like(structure.fields["psi"])
 
     results: List[CycleResult] = []
+    current_macro = 0.0
     for cycle in range(1, cycles + 1):
         for sign in (+1, -1):
-            target = (sign * max_strain, 0.0, 0.0)
-            energy_val = solver.step(target)
+            target_start = current_macro
+            target_end = sign * max_strain
+            # Apply the macroscopic strain in many small increments to mimic a realistic ramp.
+            for step in range(1, strain_steps + 1):
+                alpha = step / strain_steps
+                target = target_start + (target_end - target_start) * alpha
+                energy_val = solver.step((target, 0.0, 0.0))
+            current_macro = target_end
         crack_mean = solver.state["crack"].mean()
         plastic_mean = solver.state["plastic"].mean()
         results.append(CycleResult(cycle, energy_val, crack_mean, plastic_mean))
