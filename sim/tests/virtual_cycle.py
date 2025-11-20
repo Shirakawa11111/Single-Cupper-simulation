@@ -33,8 +33,8 @@ def run_virtual_cycles(
     max_strain: float = 0.01,
     csv_output: Path | None = None,
     data_output: Path | None = None,
-    dump_output: Path | None = None,
-    vtk_output: Path | None = None,
+    dump_dir: Path | None = None,
+    vtk_dir: Path | None = None,
 ) -> Tuple[List[CycleResult], float, float]:
     grid = GridSpec(shape=(32, 32, 16), spacing=(5e-7, 5e-7, 5e-7), periodic=(True, True, False))
     copper = CopperParameters()
@@ -46,7 +46,8 @@ def run_virtual_cycles(
     structure = builder.build(seed=42)
     mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
     pfc = PFCEvolver(grid, pfc_params, dt=5e-3)
-    solver = AlternatingSolver(coupling, energy, mechanical, pfc)
+    solver_cfg = SolverConfig(dt=5e-3, crack_relax=1e-9)
+    solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg)
     solver.initialize_state(structure.orientation, seed=42)
     for key, value in structure.fields.items():
         solver.state[key] = value.copy()
@@ -60,6 +61,21 @@ def run_virtual_cycles(
         crack_mean = solver.state["crack"].mean()
         plastic_mean = solver.state["plastic"].mean()
         results.append(CycleResult(cycle, energy_val, crack_mean, plastic_mean))
+        if dump_dir:
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            write_lammpstrj(
+                dump_dir / f"virtual_cycle_{cycle:04d}.lammpstrj",
+                grid,
+                solver.state,
+                cycle,
+            )
+        if vtk_dir:
+            vtk_dir.mkdir(parents=True, exist_ok=True)
+            write_vtk(
+                vtk_dir / f"virtual_cycle_{cycle:04d}.vti",
+                grid,
+                {"crack": solver.state["crack"], "plastic": solver.state["plastic"], "psi": solver.state["psi"]},
+            )
 
     plastic_series = np.array([r.plastic_mean for r in results])
     plastic_amplitudes = np.abs(np.diff(plastic_series, prepend=plastic_series[0]))
@@ -87,14 +103,6 @@ def run_virtual_cycles(
         data_output.parent.mkdir(parents=True, exist_ok=True)
         write_atomic_data(data_output, grid)
 
-    if dump_output:
-        dump_output.parent.mkdir(parents=True, exist_ok=True)
-        write_lammpstrj(dump_output, grid, solver.state, cycles)
-
-    if vtk_output:
-        vtk_output.parent.mkdir(parents=True, exist_ok=True)
-        write_vtk(vtk_output, grid, {"crack": solver.state["crack"], "plastic": solver.state["plastic"], "psi": solver.state["psi"]})
-
     return results, paris_coeff, coffman
 
 
@@ -102,7 +110,7 @@ if __name__ == "__main__":
     res, paris, coff = run_virtual_cycles(
         csv_output=Path("sim/tests/virtual_cycle.csv"),
         data_output=Path("sim/tests/virtual_cycle.data"),
-        dump_output=Path("sim/tests/virtual_cycle.lammpstrj"),
-        vtk_output=Path("sim/tests/virtual_cycle.vti"),
+        dump_dir=Path("sim/tests/virtual_cycle_lammpstrj"),
+        vtk_dir=Path("sim/tests/virtual_cycle_vti"),
     )
     print(f"Completed {len(res)} cycles. Paris exponent ~ {paris:.3f}, Coffin-Manson ~ {coff:.3f}")
