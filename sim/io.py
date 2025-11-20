@@ -66,3 +66,24 @@ def write_lammpstrj(path: Path, grid: GridSpec, fields: Dict[str, np.ndarray], t
                         f"{crack[i, j, k]:.6e} {plastic[i, j, k]:.6e} {psi[i, j, k]:.6e}\n"
                     )
                     atom_id += 1
+
+
+def write_vtk(path: Path, grid: GridSpec, fields: Dict[str, np.ndarray]) -> None:
+    nx, ny, nz = grid.shape
+    dx, dy, dz = grid.spacing
+    total = nx * ny * nz
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write("# vtk DataFile Version 3.0\n")
+        fh.write("Cu single-crystal phase-field data\n")
+        fh.write("ASCII\n")
+        fh.write("DATASET STRUCTURED_POINTS\n")
+        fh.write(f"DIMENSIONS {nx} {ny} {nz}\n")
+        fh.write("ORIGIN 0 0 0\n")
+        fh.write(f"SPACING {dx:.6e} {dy:.6e} {dz:.6e}\n")
+        fh.write(f"POINT_DATA {total}\n")
+        for name, field in fields.items():
+            fh.write(f"SCALARS {name} float 1\n")
+            fh.write("LOOKUP_TABLE default\n")
+            flat = np.ascontiguousarray(field).ravel(order="F")
+            for value in flat:
+                fh.write(f"{float(value):.6e}\n")

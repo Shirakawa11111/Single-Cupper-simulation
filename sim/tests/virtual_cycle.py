@@ -12,7 +12,7 @@ from typing import List, Tuple
 import numpy as np
 
 from ..energy import CopperParameters, FreeEnergy, FractureParameters, PFCParameters, PFCCoupling
-from ..io import write_atomic_data, write_lammpstrj
+from ..io import write_atomic_data, write_lammpstrj, write_vtk
 from ..mechanics import MechanicalEquilibriumSolver
 from ..operators import GridSpec
 from ..pfc import PFCEvolver
@@ -34,6 +34,7 @@ def run_virtual_cycles(
     csv_output: Path | None = None,
     data_output: Path | None = None,
     dump_output: Path | None = None,
+    vtk_output: Path | None = None,
 ) -> Tuple[List[CycleResult], float, float]:
     grid = GridSpec(shape=(32, 32, 16), spacing=(5e-7, 5e-7, 5e-7), periodic=(True, True, False))
     copper = CopperParameters()
@@ -90,6 +91,10 @@ def run_virtual_cycles(
         dump_output.parent.mkdir(parents=True, exist_ok=True)
         write_lammpstrj(dump_output, grid, solver.state, cycles)
 
+    if vtk_output:
+        vtk_output.parent.mkdir(parents=True, exist_ok=True)
+        write_vtk(vtk_output, grid, {"crack": solver.state["crack"], "plastic": solver.state["plastic"], "psi": solver.state["psi"]})
+
     return results, paris_coeff, coffman
 
 
@@ -98,5 +103,6 @@ if __name__ == "__main__":
         csv_output=Path("sim/tests/virtual_cycle.csv"),
         data_output=Path("sim/tests/virtual_cycle.data"),
         dump_output=Path("sim/tests/virtual_cycle.lammpstrj"),
+        vtk_output=Path("sim/tests/virtual_cycle.vti"),
     )
     print(f"Completed {len(res)} cycles. Paris exponent ~ {paris:.3f}, Coffin-Manson ~ {coff:.3f}")
