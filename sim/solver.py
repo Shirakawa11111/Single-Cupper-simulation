@@ -43,11 +43,13 @@ class AlternatingSolver:
         crack = np.zeros_like(psi)
         plastic = np.zeros_like(psi)
         displacement = np.zeros(psi.shape + (3,))
+        history = np.zeros_like(psi)
         self.state = {
             "psi": psi,
             "crack": crack,
             "plastic": plastic,
             "displacement": displacement,
+            "history": history,
         }
 
     def step(self, macro_strain: Tuple[float, float, float]) -> float:
@@ -57,20 +59,24 @@ class AlternatingSolver:
         crack = self.state["crack"]
         plastic = self.state["plastic"]
         displacement = self.state["displacement"]
+        history = self.state["history"]
 
         displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain)
 
         eps_eq = self.coupling.equivalent_plastic_strain(psi, plastic)
         plastic = plastic + self.config.plastic_relax * (eps_eq - plastic)
 
-        toughness = self.coupling.degraded_toughness(psi, plastic)
-        driving_force = toughness * np.maximum(0.0, np.trace(stress, axis1=-2, axis2=-1))
+        pos_energy = self.energy.positive_strain_energy(strain, self.mechanical.stiffness)
+        history = np.maximum(history, pos_energy)
+        driving_force = history * (1.0 - crack)
         crack = np.clip(crack + self.config.crack_relax * driving_force, 0.0, 1.0)
 
         psi = self.pfc.step(psi)
         psi = self.coupling.constraint.project(psi)
 
-        self.state.update({"psi": psi, "crack": crack, "plastic": plastic, "displacement": displacement})
+        self.state.update(
+            {"psi": psi, "crack": crack, "plastic": plastic, "displacement": displacement, "history": history}
+        )
         total_E = self.energy.total_energy(strain, crack, psi, self.mechanical.stiffness, plastic)
         return total_E
 

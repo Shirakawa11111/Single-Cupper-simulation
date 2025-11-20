@@ -49,6 +49,7 @@ def run_virtual_cycles(
     solver.initialize_state(structure.orientation, seed=42)
     for key, value in structure.fields.items():
         solver.state[key] = value.copy()
+    solver.state["history"] = np.zeros_like(structure.fields["psi"])
 
     results: List[CycleResult] = []
     for cycle in range(1, cycles + 1):
