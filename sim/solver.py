@@ -69,7 +69,8 @@ class AlternatingSolver:
         pos_energy = self.energy.positive_strain_energy(strain, self.mechanical.stiffness)
         history = np.maximum(history, pos_energy)
         toughness = self.coupling.degraded_toughness(psi, plastic)
-        driving_force = (history / (toughness + 1e-12)) * (1.0 - crack)
+        # Scale by the phase-field length to compare elastic energy density to critical fracture energy density.
+        driving_force = (history * self.energy.fracture.l0 / (toughness + 1e-12)) * (1.0 - crack)
         crack = np.clip(crack + self.config.crack_relax * driving_force, 0.0, 1.0)
 
         psi = self.pfc.step(psi)
