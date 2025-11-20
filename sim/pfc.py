@@ -41,7 +41,7 @@ class PFCEvolver:
         for axis, k_base in enumerate(self.base_k_axes):
             eps = strain[axis]
             # 【修正点】除法改为乘法，实现正确的拉伸耦合
-            k_strained = k_base / (1.0 + eps)
+            k_strained = k_base * (1.0 + eps)
             
             shape = [1] * len(self.grid.shape)
             shape[axis] = -1

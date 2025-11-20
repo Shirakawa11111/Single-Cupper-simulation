@@ -29,7 +29,7 @@ class CycleResult:
 
 
 def run_virtual_cycles(
-    cycles: int = 1,          # 建议调试时先跑 1-2 个周期
+    cycles: int = 3,          # 建议调试时先跑 1-2 个周期
     max_strain: float = 0.08, # 8% 拉伸，足以产生位错
     strain_steps: int = 100,  # 每半周期分 100 步
     csv_output: Path | None = None,
@@ -93,9 +93,14 @@ def run_virtual_cycles(
                         write_vtk(
                             vtk_dir / f"anim_frame_{frame_id:05d}.vtk",
                             grid,
-                            {"crack": solver.state["crack"], 
-                             "plastic": solver.state["plastic"], 
-                             "psi": solver.state["psi"]}
+                            {
+                                "crack": solver.state["crack"],
+                                "plastic": solver.state["plastic"],
+                                "psi": solver.state["psi"],
+                                "displacement": solver.state["displacement"],
+                            },
+                            macro_strain=(current_strain, 0.0, 0.0),
+                            deform_coordinates=True,
                         )
 
         results.append(CycleResult(cycle, energy_val, solver.state["crack"].mean(), solver.state["plastic"].mean()))
@@ -108,6 +113,7 @@ def run_virtual_cycles(
                 grid,
                 solver.state,
                 cycle,
+                macro_strain=(current_strain, 0.0, 0.0),
             )
 
     # 3. 后处理统计 (修复了这里！)
