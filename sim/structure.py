@@ -18,6 +18,7 @@ from .operators import GridSpec
 class Cu111Structure:
     grid: GridSpec
     fields: Dict[str, np.ndarray]
+    orientation: np.ndarray
 
     def export(self, data_path, dump_path, timestep: int = 0) -> None:
         write_atomic_data(data_path, self.grid)
@@ -44,9 +45,10 @@ class Cu111StructureBuilder:
     def build(self, seed: int = 0) -> Cu111Structure:
         generator = VirtualEBSDGenerator(self.grid.shape, self.defect_fraction)
         mask = generator.defect_mask(seed)
+        orientation = generator.orientation_field()
         rng = np.random.default_rng(seed)
         psi = self.noise * rng.standard_normal(self.grid.shape) + self.defect_amplitude * mask
         crack = np.zeros(self.grid.shape)
         plastic = mask * 0.0
         fields = {"psi": psi, "crack": crack, "plastic": plastic}
-        return Cu111Structure(self.grid, fields)
+        return Cu111Structure(self.grid, fields, orientation)

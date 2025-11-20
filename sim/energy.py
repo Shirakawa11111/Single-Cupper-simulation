@@ -42,14 +42,29 @@ class FractureParameters:
 
 @dataclass(frozen=True)
 class CopperParameters:
-    """Elastic and slip parameters for FCC copper."""
+    """Cubic elastic constants (GPa) and plasticity inputs for copper."""
 
-    youngs_modulus: float = 72e9
-    poisson_ratio: float = 0.33
-    shear_modulus: float = youngs_modulus / (2 * (1 + poisson_ratio))
+    c11: float = 168.4e9
+    c12: float = 121.4e9
+    c44: float = 75.4e9
     slip_resistance: float = 200e6
     hardening_modulus: float = 10e6
     hardening_b: float = 8.0
+
+    def stiffness_tensor(self, rotation: Array | None = None) -> Array:
+        """Return 3x3x3x3 stiffness tensor, rotated if orientation provided."""
+        C = np.zeros((3, 3, 3, 3))
+        lam = self.c12
+        mu = self.c44
+        C[0, 0, 0, 0] = C[1, 1, 1, 1] = C[2, 2, 2, 2] = self.c11
+        C[0, 0, 1, 1] = C[0, 0, 2, 2] = C[1, 1, 0, 0] = C[1, 1, 2, 2] = C[2, 2, 0, 0] = C[2, 2, 1, 1] = lam
+        C[1, 0, 0, 1] = C[0, 1, 1, 0] = C[2, 0, 0, 2] = C[0, 2, 2, 0] = C[2, 1, 1, 2] = C[1, 2, 2, 1] = mu
+        C[0, 1, 0, 1] = C[1, 0, 1, 0] = C[0, 2, 0, 2] = C[2, 0, 2, 0] = C[1, 2, 1, 2] = C[2, 1, 2, 1] = mu
+        if rotation is None:
+            return C
+        R = rotation
+        C_rot = np.einsum("ip,jq,kr,ls,pqrs->ijkl", R, R, R, R, C, optimize=True)
+        return C_rot
 
 
 class Constraint(Protocol):
@@ -136,23 +151,10 @@ class FreeEnergy:
         self.fracture = fracture
         self.pfc = pfc
 
-    def elastic_moduli(self) -> Tuple[float, float]:
-        lam = (
-            self.copper.poisson_ratio
-            * self.copper.youngs_modulus
-            / ((1 + self.copper.poisson_ratio) * (1 - 2 * self.copper.poisson_ratio))
-        )
-        mu = self.copper.shear_modulus
-        return lam, mu
-
-    def elastic_energy(self, strain: Array, crack: Array) -> Array:
-        lam, mu = self.elastic_moduli()
-        strain = np.asarray(strain)
+    def elastic_energy(self, strain: Array, crack: Array, stiffness: Array) -> Array:
         crack_factor = (1.0 - crack) ** 2 + self.fracture.k
-        trace = np.trace(strain, axis1=-2, axis2=-1)
-        dev = strain - np.eye(strain.shape[-1]) * trace[..., None, None] / 3.0
-        energy = 0.5 * lam * trace**2 + mu * np.sum(dev * dev, axis=(-2, -1))
-        return crack_factor * energy
+        energy_density = 0.5 * np.einsum("...ij,...ijkl,...kl->...", strain, stiffness, strain, optimize=True)
+        return crack_factor * energy_density
 
     def crack_energy(self, crack: Array, toughness: Array) -> Array:
         grad = np.gradient(crack)
@@ -172,10 +174,11 @@ class FreeEnergy:
         strain: Array,
         crack: Array,
         psi: Array,
+        stiffness: Array,
         plastic_eq: Array | None = None,
     ) -> float:
         toughness = self.pfc.degraded_toughness(psi, plastic_eq)
-        elastic = self.elastic_energy(strain, crack)
+        elastic = self.elastic_energy(strain, crack, stiffness)
         crack_e = self.crack_energy(crack, toughness)
         pfc_e = self.pfc_energy(psi)
         return float(np.sum(elastic + crack_e + pfc_e))

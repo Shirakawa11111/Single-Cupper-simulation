@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
-from ..ebsd import VirtualEBSDGenerator
+
 from ..energy import CopperParameters, FreeEnergy, FractureParameters, PFCParameters, PFCCoupling
 from ..io import write_atomic_data, write_lammpstrj
-from ..operators import GridSpec, HybridElasticOperator
+from ..mechanics import MechanicalEquilibriumSolver
+from ..operators import GridSpec
+from ..pfc import PFCEvolver
 from ..solver import AlternatingSolver, SolverConfig
+from ..structure import Cu111StructureBuilder
 
 
 @dataclass
@@ -32,19 +35,20 @@ def run_virtual_cycles(
     data_output: Path | None = None,
     dump_output: Path | None = None,
 ) -> Tuple[List[CycleResult], float, float]:
-    grid = GridSpec(shape=(32, 32, 16), spacing=(50, 50, 50), periodic=(True, True, False))
+    grid = GridSpec(shape=(32, 32, 16), spacing=(5e-7, 5e-7, 5e-7), periodic=(True, True, False))
     copper = CopperParameters()
     fracture = FractureParameters()
     pfc_params = PFCParameters()
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
     energy = FreeEnergy(copper, fracture, coupling)
-    elastic = HybridElasticOperator(grid, copper)
-    solver = AlternatingSolver(grid, energy, elastic, coupling, SolverConfig(dt=5e-3))
-    solver.initialize_state(seed=42)
-
-    generator = VirtualEBSDGenerator(grid.shape)
-    defects = generator.defect_mask(seed=7)
-    solver.state["psi"] += 0.1 * defects
+    builder = Cu111StructureBuilder(grid, defect_fraction=0.08, defect_amplitude=0.3)
+    structure = builder.build(seed=42)
+    mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
+    pfc = PFCEvolver(grid, pfc_params, dt=5e-3)
+    solver = AlternatingSolver(coupling, energy, mechanical, pfc)
+    solver.initialize_state(structure.orientation, seed=42)
+    for key, value in structure.fields.items():
+        solver.state[key] = value.copy()
 
     results: List[CycleResult] = []
     for cycle in range(1, cycles + 1):

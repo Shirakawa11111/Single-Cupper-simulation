@@ -1,89 +1,78 @@
 """
-Alternating solver for coupled PFC–phase-field evolution.
+Alternating solver with mechanical equilibrium and spectral PFC update.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Tuple
 
 import numpy as np
 
 from .energy import Array, FreeEnergy, PFCCoupling
-from .operators import GridSpec, HybridElasticOperator
+from .mechanics import MechanicalEquilibriumSolver, MechanicalConfig
+from .pfc import PFCEvolver
 
 
 @dataclass
 class SolverConfig:
     dt: float = 1e-2
     plastic_relax: float = 0.1
-    crack_relax: float = 0.05
-    max_iters: int = 50
-    tol: float = 1e-6
+    crack_relax: float = 0.01
+    mechanical: MechanicalConfig = field(default_factory=MechanicalConfig)
 
 
 class AlternatingSolver:
-    """
-    Implements the sequential elastic → plastic → crack → PFC update loop.
-    """
-
     def __init__(
         self,
-        grid: GridSpec,
-        energy: FreeEnergy,
-        elastic_operator: HybridElasticOperator,
         coupling: PFCCoupling,
+        energy: FreeEnergy,
+        mechanical: MechanicalEquilibriumSolver,
+        pfc: PFCEvolver,
         config: SolverConfig | None = None,
     ) -> None:
-        self.grid = grid
-        self.energy = energy
-        self.elastic = elastic_operator
         self.coupling = coupling
+        self.energy = energy
+        self.mechanical = mechanical
+        self.pfc = pfc
         self.config = config or SolverConfig()
         self.state: Dict[str, Array] = {}
 
-    def initialize_state(self, seed: int = 0) -> None:
-        psi = self.coupling.initialize_density(self.grid.shape, seed)
-        crack = np.zeros(self.grid.shape)
-        plastic = np.zeros(self.grid.shape)
-        strain = np.zeros(self.grid.shape + (len(self.grid.shape), len(self.grid.shape)))
-        self.state = {"psi": psi, "crack": crack, "plastic": plastic, "strain": strain}
+    def initialize_state(self, orientation_field: Array, seed: int = 0) -> None:
+        psi = self.coupling.initialize_density(orientation_field.shape[:-2], seed)
+        crack = np.zeros_like(psi)
+        plastic = np.zeros_like(psi)
+        displacement = np.zeros(psi.shape + (3,))
+        self.state = {
+            "psi": psi,
+            "crack": crack,
+            "plastic": plastic,
+            "displacement": displacement,
+        }
 
-    def step(self, target_strain: Tuple[float, float, float]) -> float:
+    def step(self, macro_strain: Tuple[float, float, float]) -> float:
         if not self.state:
-            raise RuntimeError("Call initialize_state first.")
-
+            raise RuntimeError("initialize_state must be called.")
         psi = self.state["psi"]
         crack = self.state["crack"]
         plastic = self.state["plastic"]
-        strain = self.state["strain"]
+        displacement = self.state["displacement"]
 
-        # Elastic update: impose macroscopic diagonal strain.
-        diag = np.array(target_strain)
-        strain = np.zeros_like(strain)
-        for i in range(len(diag)):
-            strain[..., i, i] = diag[i]
+        displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain)
 
-        # Plastic update: simple relaxation towards equivalent strain.
         eps_eq = self.coupling.equivalent_plastic_strain(psi, plastic)
-        plastic += self.config.plastic_relax * (eps_eq - plastic)
+        plastic = plastic + self.config.plastic_relax * (eps_eq - plastic)
 
-        # Crack update: gradient descent on local energy derivative.
         toughness = self.coupling.degraded_toughness(psi, plastic)
-        grad_crack = crack - self.config.crack_relax * (toughness * crack)
-        crack = np.clip(grad_crack, 0.0, 1.0)
+        driving_force = toughness * np.maximum(0.0, np.trace(stress, axis1=-2, axis2=-1))
+        crack = np.clip(crack + self.config.crack_relax * driving_force, 0.0, 1.0)
 
-        # PFC update: conserved dynamics (simple Laplacian smoothing).
-        lap = sum(
-            np.gradient(np.gradient(psi, self.grid.spacing[i], axis=i), self.grid.spacing[i], axis=i)
-            for i in range(len(self.grid.shape))
-        )
-        psi += self.config.dt * (self.coupling.pfc_params.r * psi - self.coupling.pfc_params.u * psi**3 + lap)
-        psi = np.clip(psi, -1.0, 1.0)
+        psi = self.pfc.step(psi)
         psi = self.coupling.constraint.project(psi)
 
-        self.state.update({"psi": psi, "crack": crack, "plastic": plastic, "strain": strain})
-        return self.energy.total_energy(strain, crack, psi, plastic)
+        self.state.update({"psi": psi, "crack": crack, "plastic": plastic, "displacement": displacement})
+        total_E = self.energy.total_energy(strain, crack, psi, self.mechanical.stiffness, plastic)
+        return total_E
 
 
 __all__ = ["SolverConfig", "AlternatingSolver"]
