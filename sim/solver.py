@@ -18,7 +18,7 @@ from .pfc import PFCEvolver
 class SolverConfig:
     dt: float = 1e-2
     plastic_relax: float = 0.1
-    crack_relax: float = 0.01
+    crack_relax: float = 0.05  # 稍微调大，让裂纹在有驱动力时能生长
     mechanical: MechanicalConfig = field(default_factory=MechanicalConfig)
 
 
@@ -61,18 +61,28 @@ class AlternatingSolver:
         displacement = self.state["displacement"]
         history = self.state["history"]
 
+        # 1. 力学求解
         displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain)
 
+        # 2. 塑性场更新
         eps_eq = self.coupling.equivalent_plastic_strain(psi, plastic)
         plastic = plastic + self.config.plastic_relax * (eps_eq - plastic)
 
+        # 3. 裂纹更新 (使用 l0 修正量纲)
         pos_energy = self.energy.positive_strain_energy(strain, self.mechanical.stiffness)
         history = np.maximum(history, pos_energy)
+        
+        # 获取 l0 和 toughness
+        l0 = self.energy.fracture.l0
         toughness = self.coupling.degraded_toughness(psi, plastic)
-        # Scale by the phase-field length to compare elastic energy density to critical fracture energy density.
-        driving_force = (history * self.energy.fracture.l0 / (toughness + 1e-12)) * (1.0 - crack)
+        
+        # 计算驱动力 (引入 l0 进行无量纲化)
+        # 能量密度历史 * 长度尺度 / 韧性
+        driving_force = (history * l0 / (toughness + 1e-12)) * (1.0 - crack)
         crack = np.clip(crack + self.config.crack_relax * driving_force, 0.0, 1.0)
 
+        # 4. PFC 演化 (【关键】传入宏观应变)
+        self.pfc.update_strain(macro_strain)
         psi = self.pfc.step(psi)
         psi = self.coupling.constraint.project(psi)
 
