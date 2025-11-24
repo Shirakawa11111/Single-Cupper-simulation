@@ -52,7 +52,8 @@ def run_virtual_cycles(
     structure = builder.build(seed=42)
     
     mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
-    pfc = PFCEvolver(grid, pfc_params, dt=5e-3)
+    # 为避免 ψ 振幅溢出，开启温和截断
+    pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=2.0)
     solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.01)
     
     solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg)

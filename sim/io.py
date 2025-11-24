@@ -122,6 +122,14 @@ def write_vtk(
     vector_fields = {k: v for k, v in fields.items() if v.ndim == 4 and v.shape[-1] == 3}
     macro = macro_strain if macro_strain is not None else (0.0, 0.0, 0.0)
     disp_field = fields.get("displacement")
+
+    def _sanitize(arr: np.ndarray, clip: float | None = None) -> np.ndarray:
+        """Remove NaN/inf and optional clip to keep VTK readable."""
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        if clip is not None:
+            arr = np.clip(arr, -clip, clip)
+        return arr.astype(np.float32, copy=False)
+
     macro_disp = None
     if disp_field is not None and any(abs(m) > 0 for m in macro):
         mx, my, mz = macro
@@ -156,6 +164,7 @@ def write_vtk(
                         fh.write(f"{x0 + ux + ux_m:.6e} {y0 + uy + uy_m:.6e} {z0 + uz + uz_m:.6e}\n")
             fh.write(f"POINT_DATA {total_points}\n")
             for name, data in scalar_fields.items():
+                data = _sanitize(np.asarray(data))
                 fh.write(f"SCALARS {name} float 1\n")
                 fh.write("LOOKUP_TABLE default\n")
                 for k in range(nz):
@@ -163,6 +172,7 @@ def write_vtk(
                         for i in range(nx):
                             fh.write(f"{float(data[i, j, k]):.6e}\n")
             for name, data in vector_fields.items():
+                data = _sanitize(np.asarray(data))
                 fh.write(f"VECTORS {name} float\n")
                 for k in range(nz):
                     for j in range(ny):
@@ -187,7 +197,7 @@ def write_vtk(
             
             # 2. 循环写入标量
             for name, data in scalar_fields.items():
-                data_arr = np.asarray(data, dtype=np.float32) # VTK 默认 float 是 32位
+                data_arr = _sanitize(np.asarray(data))
                 # 写入变量头
                 fh.write(f"SCALARS {name} float 1\n".encode('ascii'))
                 fh.write(b"LOOKUP_TABLE default\n")
@@ -211,7 +221,7 @@ def write_vtk(
 
             # 3. 循环写入向量场（如位移）
             for name, data in vector_fields.items():
-                data_arr = np.asarray(data, dtype=np.float32)
+                data_arr = _sanitize(np.asarray(data))
                 fh.write(f"VECTORS {name} float\n".encode('ascii'))
                 if data_arr.ndim == 4 and data_arr.shape[-1] == 3:
                     flat_data = data_arr.transpose(2, 1, 0, 3).reshape(-1, 3)
