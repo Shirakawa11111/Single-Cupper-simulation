@@ -1,0 +1,141 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, geometry}
+\usepackage[UTF8,fontset=fandol]{ctex} % compile with xelatex for CJK support and fonts
+\geometry{margin=1in}
+\title{Phase-Field Crystal Framework for Single-Crystal Copper: Summary}
+\author{Project Memo}
+\date{\today}
+\begin{document}
+\maketitle
+
+\section{Background and Objectives}
+The project replicates the ductile-fracture framework of Xu \emph{et al.}\cite{paper} to predict the tensile response of single-crystal copper (Cu) informed by EBSD observations. The primary objectives are: (i) build synthetic or EBSD-derived $[111]$ Cu structures with defects, (ii) couple Phase-Field Crystal (PFC) density evolution with phase-field fracture and crystal plasticity, (iii) solve mechanical equilibrium for anisotropic FCC copper, evolve plasticity and cracks, and export results for Ovito/ParaView, and (iv) compare simulated crack paths, stress--strain curves, and fatigue metrics (Paris, Coffin--Manson) with experiments.
+
+\section{Energy Functional and Constraints}
+State variables include the PFC density $\psi$, crack field $\phi\in[0,1]$, plastic strain $\varepsilon^p$, and grain/orientation markers $\eta_g$. The free energy reads
+\begin{equation}
+F = \int_{\Omega} \left[(1-\phi)^2 f_{\text{elas}}^{+} + f_{\text{elas}}^{-} + f_{\text{frac}} + f_{\text{grain}} + f_{\text{PFC}} \right] \, d\Omega.
+\end{equation}
+Elastic energy employs the cubic stiffness tensor $C_{ijkl}$, rotated to the local orientation $R$ via $C'_{ijkl}=R_{ip}R_{jq}R_{kr}R_{ls} C_{pqrs}$. Spectral decomposition of the strain tensor provides tensile/compressive splits: $\varepsilon = Q\Lambda Q^{\top}$, and $\Lambda^{+}$ keeps positive eigenvalues.
+Here $\psi$ is the dimensionless PFC density deviation, $\phi$ is the damage/crack variable, $\varepsilon^p$ is the plastic strain, $\eta_g$ labels grain orientation, $f_{\text{elas}}^{\pm}$ are the positive/negative parts of the elastic energy density built from $\varepsilon - \varepsilon^p$, and $f_{\text{PFC}}$ captures lattice-scale ordering.
+
+Fracture energy
+\begin{equation}
+f_{\text{frac}} = G_c(\eta_g, \varepsilon_{\text{eq}}) \left[ \frac{\phi^2}{2\ell_0} + \frac{\ell_0}{2} |\nabla \phi|^2 \right]
+\end{equation}
+uses a toughness degradation law
+\begin{equation}
+G_c = G_{c0} \left(0.5 - g_{\text{res}} \tanh \left[ 2 \left(\frac{\varepsilon_{\text{eq}}}{\varepsilon_{1/2}} - 1 \right) \right] + 0.5 + g_{\text{res}} \right),
+\end{equation}
+which lowers $G_c$ with accumulated plastic strain. Parameters: $G_{c0}$ initial toughness, $\ell_0$ regularization length, $g_{\text{res}}$ residual toughness ratio, and $\varepsilon_{1/2}$ the equivalent plastic strain at half-toughness. The equivalent plastic strain $\varepsilon_{\text{eq}}$ is derived from the PFC density gradients or an explicit plastic field, matching the code path in \texttt{PFCCoupling}.
+Crack driving compares tensile elastic energy density with the critical fracture energy density $G_c/\ell_0$, so the numerical driving term uses $H \ell_0 /(G_c + \epsilon)$; this reintroduces the characteristic length to maintain a dimensionless ratio and avoid blow-up.
+
+\paragraph{Plastic surrogates and anisotropic driving} Mechanical and PFC contributions are blended:
+\begin{align}
+\hat{\varepsilon}_{\text{vm}} &= \frac{\sqrt{1.5\,\mathrm{dev}(\varepsilon):\mathrm{dev}(\varepsilon)}}{\max|\cdot|}, \qquad
+\hat{g} = \frac{\sqrt{\sum_i (\partial_i \psi)^2}}{\max|\cdot|}, \\
+\varepsilon_{\text{eq}} &= w_{\text{mech}}\,\hat{\varepsilon}_{\text{vm}} + (1-w_{\text{mech}})\,\hat{g},\\
+\varepsilon_{\text{dir},i} &= w_{\text{mech}}\,[\varepsilon_{ii}]_+ + (1-w_{\text{mech}})\,\frac{|\partial_i \psi|}{\max_j |\partial_j \psi|},
+\end{align}
+where $w_{\text{mech}}\in[0,1]$ (default 0.9) and $[\cdot]_+$ clamps to tension. The loading-axis component $\varepsilon_{\text{dir},L}$ boosts both the history and crack driving:
+\begin{equation}
+H \leftarrow \max\!\big(H,\; f_{\text{elas}}^{+}(1+k_{\text{dir}}\varepsilon_{\text{dir},L})\big), \qquad
+\mathcal{D} = \frac{H\,\ell_0}{G_c+\epsilon}(1-\phi)(1+k_{\text{dir}}\varepsilon_{\text{dir},L}),
+\end{equation}
+with $k_{\text{dir}}$ (default 0.8) tuning anisotropy. When stress coupling is enabled, the chemical potential gets an additive term
+\begin{equation}
+\mu_{\text{extra}} = \alpha \frac{\sigma_{\text{vm}}}{\max |\sigma_{\text{vm}}|},
+\end{equation}
+so high von Mises regions accelerate PFC evolution.
+
+The PFC energy follows
+\begin{equation}
+f_{\text{PFC}} = \frac{\psi}{2} \left[r + (q_0^2 + \nabla^2)^2 \right]\psi + \frac{u}{4} \psi^4,
+\end{equation}
+with constraints (density conservation, grain fractions, plastic incompressibility) enforced through Lagrange multipliers in the modified TDGL formulation. Here $r$ is the undercooling parameter that sets the ordering tendency, $q_0$ is the principal reciprocal lattice magnitude, and $u$ penalizes large density excursions; the noise amplitude only seeds initial defects and does not enter the energy.
+
+\section{Mechanical Equilibrium}
+Small-strain equilibrium is imposed:
+\begin{equation}
+\nabla\cdot \boldsymbol{\sigma} = \mathbf{0}, \qquad \boldsymbol{\sigma} = C'(\mathbf{x}) : (\varepsilon - \varepsilon^p),
+\end{equation}
+with periodic in-plane boundaries and prescribed macroscopic strain $\varepsilon^{\text{macro}}$ in the loading direction. A conjugate-gradient linear operator solves for displacement $\mathbf{u}$, yielding total strain $\varepsilon = \nabla_s \mathbf{u} + \varepsilon^{\text{macro}}$. The rotated tensor $C'(\mathbf{x})$ comes from local orientation $R(\mathbf{x})$; $\varepsilon^p$ is either driven by PFC gradients or provided explicitly.
+
+\section{Phase-Field Crystal Dynamics}
+PFC density obeys conserved dynamics:
+\begin{equation}
+\frac{\partial \psi}{\partial t} = -\nabla^2 \mu, \qquad \mu = r\psi + (q_0^2 + \nabla^2)^2 \psi + u \psi^3,
+\end{equation}
+implemented spectrally with FFTs to evaluate $(q_0^2 - k^2)^2$ and advance $\psi$ semi-implicitly.
+
+\section{Crack Evolution}
+A history variable $H(\mathbf{x}) = \max_{t'\leq t} f_{\text{elas}}^{+}(\mathbf{x},t')$ accumulates tensile energy. Crack driving force combines energy and toughness:
+\begin{equation}
+\mathcal{D} = \frac{H\,\ell_0}{G_c + \epsilon}(1 - \phi),
+\end{equation}
+which compares the current tensile energy density to the critical fracture energy density $G_c / \ell_0$ (here $\ell_0 \approx 3\times10^{-6}$~m). The evolution law $\dot{\phi} = L_\phi \mathcal{D}$ is clamped to $[0,1]$, so cracks grow faster where energy is high and toughness is low.
+Here $H$ stores the maximum tensile elastic energy density seen so far, $\epsilon$ is a small numerical residual stiffness, and $L_\phi$ is the kinetic coefficient for the crack field.
+
+\section{Numerical Workflow}
+\begin{enumerate}
+    \item \textbf{Structure generation}: `Cu111StructureBuilder` constructs grids (32$\times$32$\times$16, spacing $5\times10^{-7}$~m) with $[111]$ orientation and random defects for testing; EBSD data can replace the synthetic mask in future runs.
+    \item \textbf{Alternating solver}: The cyclic load path is triangular $0\rightarrow +\varepsilon_{\max}\rightarrow 0 \rightarrow -\varepsilon_{\max}\rightarrow 0$, each segment subdivided into $N_{\text{seg}}$ steps. At every increment: solve mechanical equilibrium (CG); blend mechanical/PFC plastic surrogates and relax plastic scalar + directional vector; update crack with anisotropic boost; advance PFC with optional stress-coupled $\mu_{\text{extra}}$.
+    \item \textbf{Outputs}: Every few steps dump VTK frames; after each cycle dump LAMMPS and optional `.data` snapshots. Scalar/vector fields include crack, plastic (scalar + directional), $\psi$, stress (tensor and von Mises), and displacement. CSV logs store per-cycle energy, mean crack/plastic, crack increment, and plastic range; runs stop early if $\langle\phi\rangle$ exceeds a failure threshold.
+    \item \textbf{Fatigue metrics}: Fit crack increment per cycle vs cycle count (Paris-like slope) and plastic strain range vs $2N$ (Coffin--Manson slope) from the logged series.
+\end{enumerate}
+
+\section{Outlook}
+The framework replicates Fig.~1--4 behavior from Xu \emph{et al.}\cite{paper} at the single-crystal scale. Next steps include (i) ingesting actual EBSD orientation/defect maps, (ii) swapping the CG equilibrium for FFT-based Lippmann--Schwinger or FEM for faster convergence and non-periodic BCs, and (iii) embedding full crystal-plasticity slip kinetics and validated fracture history laws.
+
+\begin{thebibliography}{1}
+\bibitem{paper} F. Xue \emph{et al.}, ``Phase-field framework with constraints and its applications to ductile fracture in polycrystals and fatigue,'' \emph{npj Computational Materials} 8, 18 (2022).
+\end{thebibliography}
+
+\section{Recent Code Updates (Summary)}
+\begin{itemize}
+    \item 塑性与方向场：新增 \texttt{plastic\_measures} 计算 $\varepsilon_{\text{eq}}$ 与方向分量，机械 von Mises/轴向应变与 PFC 梯度按权重混合，默认机械占比 0.9。
+    \item 方向性裂纹驱动：加载轴塑性正分量放大历史能量和驱动力（\texttt{dir\_coupling}=0.8），抑制非加载方向裂纹。
+    \item 应力耦合 PFC：von Mises 应力归一化后作为 $\mu_\text{extra}$ 加入化学势，提升高应力区的晶格演化响应。
+    \item 求解与载荷：采用对称三角循环载荷（0$\rightarrow$+$\varepsilon_{\max}\rightarrow$0$\rightarrow$-$\varepsilon_{\max}\rightarrow$0），可设置失败阈值提前终止；跟踪每周期塑性范围 $\Delta\varepsilon_p$ 和裂纹增量。
+    \item VTK/LAMMPS 输出扩展：输出塑性方向分量、应力张量/ von Mises，附带归一化场（crack\_norm, plastic\_vec\_norm, stress\_vm\_norm, disp\_total\_norm 等）便于统一色标；VTK 现默认二进制 STRUCTURED\_GRID（变形坐标），避免 ASCII 读入报错，LAMMPS 去重了多余的 \texttt{plastic\_vec} 列。
+    \item 结构缺陷默认幅值调至 0.12，PFC 截断默认 $|\psi|\leq 1.2$，方便在高载下保持稳定。
+\end{itemize}
+
+\section{Practical Simulation Recipe}
+\begin{enumerate}
+    \item \textbf{结构初始化}：用 \texttt{Cu111StructureBuilder} 构造网格（默认 [111] 单晶，或提供 grain labels/orientation map）。缺陷幅值默认 0.12，噪声注入 $\psi$；可直接替换为 EBSD 导出的取向场。
+    \item \textbf{求解循环}：\texttt{run\_virtual\_cycles} 采用三角载荷 0$\rightarrow$+$\varepsilon_\text{max}\rightarrow$0$\rightarrow$-$\varepsilon_\text{max}\rightarrow$0，默认每段 50 步，可多周期。每步执行：力学求解（CG）；塑性标量+方向分量松弛；裂纹更新（方向增益）；PFC 更新（含应力耦合 $\mu_{\text{extra}}$）。
+    \item \textbf{参数提示}：\texttt{mech\_plastic\_weight}=0.9，\texttt{dir\_coupling}=0.8，\texttt{plastic\_relax}=0.2，\texttt{clip}=1.2，\texttt{failure\_threshold}=0.98；必要时调节应力耦合系数（\texttt{mu\_extra\_from\_stress}）或加载轴 \texttt{load\_axis}。
+    \item \textbf{输出与监控}：每 5 步 VTK 帧（\texttt{anim\_frame\_*.vtk}）和每周期 LAMMPS dump（\texttt{virtual\_cycle\_*.lammpstrj}）；CSV 日志记录能量、裂纹均值/增量、塑性均值/范围，裂纹均值超阈值将提前停止。
+\end{enumerate}
+
+\section{Field/Output Guide}
+\begin{itemize}
+    \item \textbf{VTK frame files} (\texttt{sim/tests/virtual\_cycle\_vtk/anim\_frame\_*.vtk}): 二进制 STRUCTURED\_GRID（若启用变形坐标），含下列标量/向量；加载时关闭 per-timestep rescale，固定色标（裂纹 0--0.3 或 0--1，塑性/应力 0--1）。
+    \item $\psi$: PFC 密度偏差，红/蓝表示高/低密度或缺陷核；受应力耦合影响会在高应力区演化。
+    \item \texttt{crack}, \texttt{crack\_norm}, \texttt{crack\_clamp03}: 裂纹变量（0--1），clamp03 便于观察萌生阶段，norm 便于固定色标。
+    \item \texttt{plastic} (标量), \texttt{plastic\_vec} (方向): 来自机械应变 + PFC 梯度；\texttt{plastic\_vec\_x\_norm} 可直接用于加载方向色标，\texttt{plastic\_vec\_mag} 为模值。
+    \item \texttt{stress\_vm}, \texttt{stress\_vm\_norm}: von Mises 应力，可用于判断高应力区；亦用于 $\mu_\text{extra}$。
+    \item \texttt{displacement}, \texttt{displacement\_total}: 微观/总位移；\texttt{disp\_total\_norm} 提供归一化幅值，避免色标跳变。
+    \item \textbf{LAMMPS dump} (\texttt{sim/tests/virtual\_cycle\_0001.lammpstrj}): 列顺序为 \texttt{id, type, x, y, z, crack, plastic, psi, plastic\_xx, plastic\_yy, plastic\_zz, stress\_vm, stress\_xx, stress\_yy, stress\_zz}（若场缺失则省略），坐标包含宏+微观位移。
+    \item \textbf{CSV 日志} (\texttt{sim/tests/virtual\_cycle.csv}): \texttt{cycle}（循环编号）、\texttt{energy}（总能量）、\texttt{crack\_mean}（裂纹均值）、\texttt{plastic\_mean}（塑性均值）、\texttt{crack\_delta}（该周期裂纹增量）、\texttt{plastic\_range}（该周期塑性范围 $\Delta\varepsilon_p$）。
+    \item 归一化场均在 VTK 中提供，便于在 ParaView 固定色标（range 0--1 或 0--0.3）播放时间序列。
+\end{itemize}
+
+\section{实验流程与数据对应}
+\begin{itemize}
+    \item \textbf{载荷与网格}: 默认单晶网格 $32\times32\times16$，缺陷幅值 0.12；三角循环载荷（0$\rightarrow$+$\varepsilon_{\max}\rightarrow$0$\rightarrow$-$\varepsilon_{\max}\rightarrow$0），每段 50 步，\texttt{max\_strain}=0.08，可设置 \texttt{failure\_threshold}（0.98）提前终止。
+    \item \textbf{周期统计}: \texttt{energy} 为周期末总能量；\texttt{crack\_mean} 代表损伤程度（接近 1 表示贯穿）；\texttt{crack\_delta} 是相邻周期裂纹增量，用于 Paris 拟合；\texttt{plastic\_mean} 为塑性均值；\texttt{plastic\_range} 为该周期塑性最大-最小（$\Delta\varepsilon_p$ 替代量，用于 Coffin--Manson 拟合）。
+    \item \textbf{可视化要点}: 在 ParaView/Ovito 打开 VTK 或 LAMMPS dump 时，优先查看 \texttt{crack\_clamp03}（萌生）、\texttt{plastic\_vec\_x\_norm}（加载方向塑性）、\texttt{stress\_vm\_norm}（等效应力）、\texttt{disp\_total\_norm}（总位移）。固定色标 0--1 便于跨帧比较。
+    \item \textbf{Coffin--Manson/Paris 指标}: 拟合对数斜率 $\mathrm{d}\log(\Delta\varepsilon_p)/\mathrm{d}\log(2N)$ 得到 Coffin--Manson；拟合 $\log(\Delta\phi)/\log(N)$ 得到 Paris-like 系数，均由 \texttt{sim/tests/virtual\_cycle.py} 自动计算并打印。
+\end{itemize}
+
+\section{当前结果快照}
+\begin{itemize}
+    \item \textbf{帧 1}: 裂纹 $\max\phi\approx4.9\times10^{-7}$（近零），塑性 $\bar{\varepsilon}^p\approx0.62$，\texttt{stress\_vm} 约 $1.03\times10^{-2}$；宏观位移梯度 0--0.508 已写入 \texttt{displacement\_total}。
+    \item \textbf{帧 41（循环中段）}: 裂纹 $\phi\approx0.014$--0.018，塑性 0.84--0.94，方向塑性模 0.24--0.36；等效应力约 $1.01\times10^{-2}$，场较均匀。
+    \item \textbf{帧 80（循环末，回到零应变）}: 裂纹均值 $\approx2.65\times10^{-2}$，仍未贯穿；塑性 0.72--0.82，方向塑性接近 0；应力/总位移回零，符合卸载回零边界。
+    \item \textbf{结论}: 当前载荷与韧性下仅出现轻微、均匀损伤和塑性累积，无明显裂纹带或强应力集中；若需更强局部化，可提高载荷峰值/循环数、增大 \texttt{dir\_coupling} 或降低韧性/提高缺陷幅值，并保持固定色标判断真实局部化。
+\end{itemize}
+
+\end{document}
