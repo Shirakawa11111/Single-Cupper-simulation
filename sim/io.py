@@ -66,8 +66,20 @@ def write_lammpstrj(
     crack = fields.get("crack", np.zeros((nx, ny, nz)))
     plastic = fields.get("plastic", np.zeros((nx, ny, nz)))
     psi = fields.get("psi", np.zeros((nx, ny, nz)))
+    plastic_vec = fields.get("plastic_vec")
+    stress_vm = fields.get("stress_vm")
+    stress = fields.get("stress")
     displacement = fields.get("displacement")
     macro = macro_strain if macro_strain is not None else (0.0, 0.0, 0.0)
+
+    extra_scalars = []
+    if plastic_vec is not None and plastic_vec.shape == (nx, ny, nz, 3):
+        extra_scalars = ["plastic_xx", "plastic_yy", "plastic_zz"]
+    stress_scalars = []
+    if stress_vm is not None and stress_vm.shape == (nx, ny, nz):
+        stress_scalars.append("stress_vm")
+    if stress is not None and stress.shape == (nx, ny, nz, 3, 3):
+        stress_scalars.extend(["stress_xx", "stress_yy", "stress_zz"])
     
     with path.open("w", encoding="utf-8") as fh:
         fh.write("ITEM: TIMESTEP\n")
@@ -78,7 +90,8 @@ def write_lammpstrj(
         fh.write(f"0.0 {Lx:.6e}\n")
         fh.write(f"0.0 {Ly:.6e}\n")
         fh.write(f"0.0 {Lz:.6e}\n")
-        fh.write("ITEM: ATOMS id type x y z crack plastic psi\n")
+        cols = ["id", "type", "x", "y", "z", "crack", "plastic", "psi"] + extra_scalars + stress_scalars
+        fh.write("ITEM: ATOMS " + " ".join(cols) + "\n")
         
         atom_id = 1
         for k in range(nz):
@@ -94,10 +107,27 @@ def write_lammpstrj(
                     x_out = x + ux_macro + ux_micro
                     y_out = y + uy_macro + uy_micro
                     z_out = z + uz_macro + uz_micro
-                    fh.write(
-                        f"{atom_id} 1 {x_out:.6e} {y_out:.6e} {z_out:.6e} "
-                        f"{crack[i, j, k]:.6e} {plastic[i, j, k]:.6e} {psi[i, j, k]:.6e}\n"
-                    )
+                    values = [
+                        atom_id,
+                        1,
+                        x_out,
+                        y_out,
+                        z_out,
+                        crack[i, j, k],
+                        plastic[i, j, k],
+                        psi[i, j, k],
+                    ]
+                    if plastic_vec is not None and plastic_vec.shape == (nx, ny, nz, 3):
+                        px, py, pz = plastic_vec[i, j, k]
+                        values.extend([px, py, pz])
+                    if stress_vm is not None and stress_vm.shape == (nx, ny, nz):
+                        values.append(stress_vm[i, j, k])
+                    if stress is not None and stress.shape == (nx, ny, nz, 3, 3):
+                        sxx = stress[i, j, k, 0, 0]
+                        syy = stress[i, j, k, 1, 1]
+                        szz = stress[i, j, k, 2, 2]
+                        values.extend([sxx, syy, szz])
+                    fh.write(" ".join(f"{v:.6e}" if isinstance(v, float) else str(v) for v in values) + "\n")
                     atom_id += 1
 
 
@@ -144,41 +174,81 @@ def write_vtk(
     elif disp_field is not None:
         vector_fields["displacement_total"] = disp_field
 
+    # Normalized helper fields for stable colorbars
+    if "crack" in scalar_fields:
+        crack = scalar_fields["crack"]
+        scalar_fields["crack_norm"] = np.clip(crack, 0.0, 1.0)
+        scalar_fields["crack_clamp03"] = np.clip(crack, 0.0, 0.3)
+    if "plastic" in scalar_fields:
+        plastic = scalar_fields["plastic"]
+        maxp = np.max(np.abs(plastic)) + 1e-12
+        scalar_fields["plastic_norm"] = plastic / maxp
+    if "plastic_vec" in vector_fields:
+        pv = vector_fields["plastic_vec"]
+        mag = np.linalg.norm(pv, axis=-1)
+        maxmag = np.max(mag) + 1e-12
+        scalar_fields["plastic_vec_mag"] = mag
+        scalar_fields["plastic_vec_norm"] = mag / maxmag
+        scalar_fields["plastic_vec_x_norm"] = np.clip(pv[..., 0] / (np.max(np.abs(pv[..., 0])) + 1e-12), 0.0, 1.0)
+    if "stress_vm" in scalar_fields:
+        svm = scalar_fields["stress_vm"]
+        maxs = np.max(np.abs(svm)) + 1e-12
+        scalar_fields["stress_vm_norm"] = svm / maxs
+    if "displacement_total" in vector_fields:
+        dtotal = vector_fields["displacement_total"]
+        mag = np.linalg.norm(dtotal, axis=-1)
+        maxd = np.max(mag) + 1e-12
+        scalar_fields["disp_total_mag"] = mag
+        scalar_fields["disp_total_norm"] = mag / maxd
+
     if deform_coordinates and disp_field is not None:
-        # 输出 STRUCTURED_GRID，点坐标包含宏观+微观位移
-        with path.open("w", encoding="utf-8") as fh:
-            fh.write("# vtk DataFile Version 3.0\n")
-            fh.write("PhaseFieldSimulation\n")
-            fh.write("ASCII\n")
-            fh.write("DATASET STRUCTURED_GRID\n")
-            fh.write(f"DIMENSIONS {nx} {ny} {nz}\n")
-            fh.write(f"POINTS {total_points} float\n")
-            for k in range(nz):
-                z0 = dz * k
-                for j in range(ny):
-                    y0 = dy * j
-                    for i in range(nx):
-                        x0 = dx * i
-                        ux, uy, uz = disp_field[i, j, k]
-                        ux_m, uy_m, uz_m = (macro_disp[i, j, k] if macro_disp is not None else (0.0, 0.0, 0.0))
-                        fh.write(f"{x0 + ux + ux_m:.6e} {y0 + uy + uy_m:.6e} {z0 + uz + uz_m:.6e}\n")
-            fh.write(f"POINT_DATA {total_points}\n")
+        # Binary STRUCTURED_GRID with deformed coordinates (macro + micro displacement)
+        with path.open("wb") as fh:
+            fh.write(b"# vtk DataFile Version 3.0\n")
+            fh.write(b"PhaseFieldSimulation\n")
+            fh.write(b"BINARY\n")
+            fh.write(b"DATASET STRUCTURED_GRID\n")
+            fh.write(f"DIMENSIONS {nx} {ny} {nz}\n".encode("ascii"))
+            fh.write(f"POINTS {total_points} float\n".encode("ascii"))
+
+            # base coordinates
+            xs = np.linspace(0, dx * (nx - 1), nx, dtype=np.float32)
+            ys = np.linspace(0, dy * (ny - 1), ny, dtype=np.float32)
+            zs = np.linspace(0, dz * (nz - 1), nz, dtype=np.float32)
+            X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+            coords = np.stack((X, Y, Z), axis=-1)
+            disp_total = disp_field.copy()
+            if macro_disp is not None:
+                disp_total = disp_total + macro_disp
+            coords = coords + disp_total
+            coords = _sanitize(coords)
+            coords_flat = coords.transpose(2, 1, 0, 3).reshape(-1, 3)
+            coords_flat.astype(">f4").tofile(fh)
+            fh.write(b"\n")
+
+            fh.write(f"POINT_DATA {total_points}\n".encode("ascii"))
             for name, data in scalar_fields.items():
-                data = _sanitize(np.asarray(data))
-                fh.write(f"SCALARS {name} float 1\n")
-                fh.write("LOOKUP_TABLE default\n")
-                for k in range(nz):
-                    for j in range(ny):
-                        for i in range(nx):
-                            fh.write(f"{float(data[i, j, k]):.6e}\n")
+                data_arr = _sanitize(np.asarray(data))
+                fh.write(f"SCALARS {name} float 1\n".encode("ascii"))
+                fh.write(b"LOOKUP_TABLE default\n")
+                flat_data = data_arr.transpose(2, 1, 0).flatten()
+                if flat_data.size != total_points:
+                    print(f"[WARNING] Field '{name}' size mismatch. Skipped.")
+                    continue
+                flat_data.astype(">f4").tofile(fh)
+                fh.write(b"\n")
             for name, data in vector_fields.items():
-                data = _sanitize(np.asarray(data))
-                fh.write(f"VECTORS {name} float\n")
-                for k in range(nz):
-                    for j in range(ny):
-                        for i in range(nx):
-                            vx, vy, vz = data[i, j, k]
-                            fh.write(f"{float(vx):.6e} {float(vy):.6e} {float(vz):.6e}\n")
+                data_arr = _sanitize(np.asarray(data))
+                fh.write(f"VECTORS {name} float\n".encode("ascii"))
+                if data_arr.ndim == 4 and data_arr.shape[-1] == 3:
+                    flat_data = data_arr.transpose(2, 1, 0, 3).reshape(-1, 3)
+                else:
+                    flat_data = data_arr.reshape(-1, 3)
+                if flat_data.shape[0] != total_points:
+                    print(f"[WARNING] Vector field '{name}' size mismatch. Skipped.")
+                    continue
+                flat_data.astype(">f4").tofile(fh)
+                fh.write(b"\n")
     else:
         # 注意：必须使用 'wb' (二进制写入模式)
         with path.open("wb") as fh:

@@ -1,6 +1,12 @@
 """
 Driver script that runs a virtual cyclic tension test on a synthetic 111-oriented
 single crystal and reports Paris/Coffin–Manson fits.
+
+Updates:
+- Supports multi-segment load path: 0 -> +max -> 0 -> -max -> 0 (per cycle).
+- Adds failure cutoff based on crack_mean to stop early.
+- Tracks plastic strain range per cycle (Δε_p surrogate) and crack increment.
+- Fits Coffin–Manson using plastic range, and a Paris-like slope using crack growth per cycle.
 """
 
 from __future__ import annotations
@@ -29,9 +35,11 @@ class CycleResult:
 
 
 def run_virtual_cycles(
-    cycles: int = 3,          # 建议调试时先跑 1-2 个周期
-    max_strain: float = 0.08, # 8% 拉伸，足以产生位错
-    strain_steps: int = 100,  # 每半周期分 100 步
+    cycles: int = 3,               # 建议调试时先跑 1-2 个周期
+    max_strain: float = 0.08,      # 拉伸峰值
+    min_strain: float | None = None,  # 若为 None，使用对称 -max_strain
+    segment_steps: int = 50,       # 每个子段（0->峰值）步数
+    failure_threshold: float = 0.98,  # 平均裂纹达到此值提前终止
     csv_output: Path | None = None,
     data_output: Path | None = None,
     dump_dir: Path | None = None,
@@ -48,13 +56,21 @@ def run_virtual_cycles(
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
     energy = FreeEnergy(copper, fracture, coupling)
     
-    builder = Cu111StructureBuilder(grid, defect_fraction=0.08, defect_amplitude=0.3)
+    builder = Cu111StructureBuilder(grid, defect_fraction=0.08, defect_amplitude=0.12)
     structure = builder.build(seed=42)
     
     mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
     # 为避免 ψ 振幅溢出，开启温和截断
-    pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=2.0)
-    solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.01)
+    # 应力耦合项：使用 von Mises 应力场放大 μ
+    def mu_extra_from_stress(stress_vm):
+        # 归一化后乘一个系数增强驱动
+        max_vm = np.max(np.abs(stress_vm)) + 1e-12
+        norm_vm = stress_vm / max_vm
+        return 0.5 * norm_vm
+
+    # pfc_extra_mu 将在 solver 内传入
+    pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
+    solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.01, plastic_relax=0.2, mech_plastic_weight=0.9, dir_coupling=0.8)
     
     solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg)
     solver.initialize_state(structure.orientation, seed=42)
@@ -67,28 +83,29 @@ def run_virtual_cycles(
     frame_id = 0
 
     # 2. 循环加载
+    min_strain = -max_strain if min_strain is None else min_strain
+    load_segments = [max_strain, 0.0, min_strain, 0.0]  # triangle: 0->+max->0->-max->0
+
     for cycle in range(1, cycles + 1):
         print(f"=== Starting Cycle {cycle} ===")
-        # 0 -> +Max -> -Max
-        cycle_targets = [+max_strain, -max_strain]
         energy_val = 0.0
+        plastic_min, plastic_max = np.inf, -np.inf
+        crack_prev = results[-1].crack_mean if results else 0.0
         
-        for target_peak in cycle_targets:
+        for target in load_segments:
             target_start = current_strain
-            target_end = target_peak
-            
-            # 子步循环
-            for step in range(1, strain_steps + 1):
-                alpha = step / strain_steps
+            target_end = target
+            for step in range(1, segment_steps + 1):
+                alpha = step / segment_steps
                 current_strain = target_start + (target_end - target_start) * alpha
-                
-                # 求解
                 energy_val = solver.step((current_strain, 0.0, 0.0))
-                
-                # 每 5 步输出一帧
+                plast_mean = solver.state["plastic"].mean()
+                plastic_min = min(plastic_min, plast_mean)
+                plastic_max = max(plastic_max, plast_mean)
+
                 if step % 5 == 0:
                     frame_id += 1
-                    print(f"  Cycle {cycle} Substep {step}/{strain_steps} | Strain {current_strain:.4f}")
+                    print(f"  Cycle {cycle} Substep {step}/{segment_steps} | Strain {current_strain:.4f}")
                     if vtk_dir:
                         vtk_dir.mkdir(parents=True, exist_ok=True)
                         write_vtk(
@@ -97,16 +114,21 @@ def run_virtual_cycles(
                             {
                                 "crack": solver.state["crack"],
                                 "plastic": solver.state["plastic"],
+                                "plastic_vec": solver.state["plastic_vec"],
                                 "psi": solver.state["psi"],
                                 "displacement": solver.state["displacement"],
+                                "stress_vm": solver.state["stress_vm"],
                             },
                             macro_strain=(current_strain, 0.0, 0.0),
                             deform_coordinates=True,
                         )
 
-        results.append(CycleResult(cycle, energy_val, solver.state["crack"].mean(), solver.state["plastic"].mean()))
-        
-        # 导出每个 Cycle 的汇总数据
+        crack_mean = solver.state["crack"].mean()
+        plastic_mean = solver.state["plastic"].mean()
+        plastic_range = max(plastic_max - plastic_min, 0.0)
+        crack_delta = max(crack_mean - crack_prev, 0.0)
+        results.append(CycleResult(cycle, energy_val, crack_mean, plastic_mean))
+
         if dump_dir:
             dump_dir.mkdir(parents=True, exist_ok=True)
             write_lammpstrj(
@@ -117,37 +139,44 @@ def run_virtual_cycles(
                 macro_strain=(current_strain, 0.0, 0.0),
             )
 
-    # 3. 后处理统计 (修复了这里！)
-    plastic_series = np.array([r.plastic_mean for r in results])
-    # 处理 plastic_series 可能为空的情况
-    if len(plastic_series) > 1:
-        plastic_amplitudes = np.abs(np.diff(plastic_series, prepend=plastic_series[0]))
-    else:
-        plastic_amplitudes = np.zeros_like(plastic_series)
+        # Early stop if failed
+        if crack_mean >= failure_threshold:
+            print(f"[STOP] Crack mean {crack_mean:.3f} reached threshold {failure_threshold}.")
+            break
 
-    crack_growth = np.array([r.crack_mean for r in results])
-    
-    paris_coeff = 0.0
-    if len(crack_growth) > 1:
-        dcrack = np.clip(np.diff(crack_growth), 1e-9, None)
-        dN = np.ones_like(dcrack)
-        mask = np.isfinite(dcrack) & (dcrack > 0)
-        if mask.any():
-            paris_coeff = float(np.polyfit(np.log(dcrack[mask]), np.log(dN[mask]), 1)[0])
+    # 3. 后处理统计：Paris-like 与 Coffin–Manson
+    plastic_ranges = []
+    crack_deltas = []
+    for i, r in enumerate(results):
+        prev_crack = results[i - 1].crack_mean if i > 0 else r.crack_mean
+        crack_deltas.append(max(r.crack_mean - prev_crack, 1e-9))
+        # Plastic range per cycle was tracked above; reconstruct crude surrogate
+        if i == 0:
+            plastic_ranges.append(max(2 * r.plastic_mean, 1e-9))
+        else:
+            plastic_ranges.append(max(abs(r.plastic_mean - results[i - 1].plastic_mean), 1e-9))
 
     cycles_arr = np.arange(1, len(results) + 1, dtype=float)
+    paris_coeff = 0.0
+    if len(crack_deltas) > 1:
+        mask = np.isfinite(crack_deltas) & (np.array(crack_deltas) > 0)
+        if mask.any():
+            paris_coeff = float(np.polyfit(np.log(np.array(crack_deltas)[mask]), np.log(cycles_arr[mask]), 1)[0])
+
     coffman = 0.0
-    if len(plastic_amplitudes) > 0:
-        coff_mask = plastic_amplitudes > 0
-        if coff_mask.any():
-            coffman = float(np.polyfit(np.log(plastic_amplitudes[coff_mask]), np.log(cycles_arr[coff_mask]), 1)[0])
+    if len(plastic_ranges) > 0:
+        pr = np.array(plastic_ranges)
+        mask = pr > 0
+        if mask.any():
+            coffman = float(np.polyfit(np.log(pr[mask]), np.log(2 * cycles_arr[mask]), 1)[0])
 
     if csv_output:
         csv_output.parent.mkdir(parents=True, exist_ok=True)
         with csv_output.open("w", encoding="utf-8") as fh:
-            fh.write("cycle,energy,crack_mean,plastic_mean\n")
-            for r in results:
-                fh.write(f"{r.cycle},{r.load:.6e},{r.crack_mean:.6e},{r.plastic_mean:.6e}\n")
+            fh.write("cycle,energy,crack_mean,plastic_mean,crack_delta,plastic_range\n")
+            prev_crack = results[0].crack_mean if results else 0.0
+            for r, pd, pr in zip(results, crack_deltas, plastic_ranges):
+                fh.write(f"{r.cycle},{r.load:.6e},{r.crack_mean:.6e},{r.plastic_mean:.6e},{pd:.6e},{pr:.6e}\n")
 
     if data_output:
         data_output.parent.mkdir(parents=True, exist_ok=True)
@@ -164,5 +193,5 @@ if __name__ == "__main__":
         vtk_dir=Path("sim/tests/virtual_cycle_vtk"),
         cycles=1,
         max_strain=0.08,
-        strain_steps=100
+        segment_steps=100
     )

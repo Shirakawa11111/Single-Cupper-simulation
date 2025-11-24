@@ -1,2 +1,2 @@
-cycle,energy,crack_mean,plastic_mean
-1,1.370309e+05,4.920184e-03,1.300152e-01
+cycle,energy,crack_mean,plastic_mean,crack_delta,plastic_range
+1,2.009636e+04,2.647111e-02,7.327893e-01,1.000000e-09,1.465579e+00

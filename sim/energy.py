@@ -123,24 +123,63 @@ class PFCCoupling:
         psi = self.pfc_params.noise * rng.standard_normal(shape)
         return self.constraint.project(psi)
 
-    def equivalent_plastic_strain(
+    def plastic_measures(
         self,
         psi: Array,
         plastic_eq: Array | None,
-    ) -> Array:
+        plastic_vec: Array | None = None,
+        strain: Array | None = None,
+        load_axis: int = 0,
+        mech_weight: float = 0.7,
+    ) -> tuple[Array, Array]:
         """
-        Translate either ψ or the supplied plastic strain field into ε_eq.
+        Compute scalar equivalent plastic strain and directional surrogate.
+        If mechanical strain is provided, blend mechanical contribution
+        (von Mises and axial component) with ψ-gradient contribution.
+        Returns (eps_eq_scalar, eps_vec) where eps_vec has shape (*grid, 3).
         """
-        if self.mode == "plastic" and plastic_eq is not None:
-            return plastic_eq
+        mech_weight = np.clip(mech_weight, 0.0, 1.0)
+        # If user supplies authoritative plastic data, return it
+        if self.mode == "plastic" and plastic_eq is not None and plastic_vec is not None:
+            return plastic_eq, plastic_vec
+
+        # --- PFC-based measures ---
         grad = np.gradient(psi)
-        invariant = np.sqrt(sum(g * g for g in grad))
-        max_inv = np.max(np.abs(invariant)) + 1e-12
-        scaled = np.clip(invariant / max_inv, 0.0, 1.0)
-        return np.nan_to_num(scaled)
+        inv = np.sqrt(sum(g * g for g in grad))
+        max_inv = np.max(np.abs(inv)) + 1e-12
+        eps_eq_pfc = np.clip(inv / max_inv, 0.0, 1.0)
+        max_comp = max(np.max(np.abs(g)) for g in grad) + 1e-12
+        comp_pfc = [np.clip(np.abs(g) / max_comp, 0.0, 1.0) for g in grad]
+
+        # --- Mechanical-based measures ---
+        eps_eq_mech = 0.0
+        comp_mech = [np.zeros_like(psi) for _ in range(3)]
+        if strain is not None:
+            # von Mises of strain tensor
+            tr = np.trace(strain, axis1=-2, axis2=-1)[..., None, None]
+            dev = strain - tr / 3.0
+            vm = np.sqrt(1.5 * np.sum(dev * dev, axis=(-2, -1)))
+            max_vm = np.max(np.abs(vm)) + 1e-12
+            eps_eq_mech = np.clip(vm / max_vm, 0.0, 1.0)
+            # axial component along load axis
+            axial = np.clip(strain[..., load_axis, load_axis], 0.0, None)
+            max_axial = np.max(np.abs(axial)) + 1e-12
+            axial_norm = np.clip(axial / max_axial, 0.0, 1.0)
+            comp_mech[load_axis] = axial_norm
+        else:
+            eps_eq_mech = np.zeros_like(psi)
+
+        # Blend mechanical and PFC contributions
+        eps_eq = mech_weight * eps_eq_mech + (1.0 - mech_weight) * eps_eq_pfc
+        comp_blend = [
+            mech_weight * cm + (1.0 - mech_weight) * cp for cm, cp in zip(comp_mech, comp_pfc)
+        ]
+        eps_vec = np.stack(comp_blend, axis=-1)
+
+        return np.nan_to_num(eps_eq), np.nan_to_num(eps_vec)
 
     def degraded_toughness(self, psi: Array, plastic_eq: Array | None = None) -> Array:
-        eps = self.equivalent_plastic_strain(psi, plastic_eq)
+        eps, _ = self.plastic_measures(psi, plastic_eq, None)
         x = eps / self.fracture.epsilon_half
         term = 0.5 - self.fracture.gres * np.tanh(2 * (x - 1.0))
         return self.fracture.gc * (term + 0.5 + self.fracture.gres)
