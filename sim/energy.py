@@ -6,6 +6,11 @@ The design follows the ductile-fracture framework described in
 npj Comput. Mater. 8, 18 (2022).  We expose class-based APIs so that
 other modules (FFT operators, solvers, test harnesses) can depend on a
 clean contract when they query energy densities or constraint forces.
+
+Current defaults are **fully non-dimensional**: length is scaled by the
+grid spacing (Δx = 1), stress by the reference copper stiffness c11, and
+energy by (stress × length³). If you need dimensional runs, rescale the
+material and fracture parameters accordingly before constructing the solver.
 """
 
 from __future__ import annotations
@@ -31,24 +36,29 @@ class PFCParameters:
 
 @dataclass(frozen=True)
 class FractureParameters:
-    """Phase-field fracture constants inherited from the paper."""
+    """Phase-field fracture constants (non-dimensional)."""
 
-    gc: float = 7.0e2  # J/m^2 initial toughness
-    l0: float = 3e-6  # m, regularization length
-    k: float = 1e-9  # numerical residual stiffness
+    gc: float = 1.0  # toughness scale, nondimensional
+    l0: float = 1.0  # regularization length scaled by grid spacing
+    k: float = 1.0e-6  # numerical residual stiffness
     epsilon_half: float = 0.15  # controls toughness decay rate
     gres: float = 0.1  # residual toughness ratio
 
 
 @dataclass(frozen=True)
 class CopperParameters:
-    """Cubic elastic constants (GPa) and plasticity inputs for copper."""
+    """
+    Cubic elastic constants and plasticity inputs for copper
+    in **non-dimensional form**. Stiffness values are normalized by c11
+    (physical ~168.4 GPa), so c11 = 1.0, c12 ≈ 0.72, c44 ≈ 0.45.
+    Plastic parameters are scaled by the same stress unit.
+    """
 
-    c11: float = 168.4e9
-    c12: float = 121.4e9
-    c44: float = 75.4e9
-    slip_resistance: float = 200e6
-    hardening_modulus: float = 10e6
+    c11: float = 1.0
+    c12: float = 0.72
+    c44: float = 0.45
+    slip_resistance: float = 1.188e-3  # 200 MPa / 168.4 GPa
+    hardening_modulus: float = 5.94e-5  # 10 MPa / 168.4 GPa
     hardening_b: float = 8.0
 
     def stiffness_tensor(self, rotation: Array | None = None) -> Array:

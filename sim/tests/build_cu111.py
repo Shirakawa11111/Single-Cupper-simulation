@@ -11,7 +11,7 @@ from ..structure import Cu111StructureBuilder
 
 
 def main() -> None:
-    grid = GridSpec(shape=(32, 32, 16), spacing=(50, 50, 50), periodic=(True, True, False))
+    grid = GridSpec(shape=(32, 32, 16), spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
     builder = Cu111StructureBuilder(grid, defect_fraction=0.08, defect_amplitude=0.3)
     structure = builder.build(seed=123)
     data_path = Path("sim/tests/cu111_single.data")

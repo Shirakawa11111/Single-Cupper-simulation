@@ -39,7 +39,7 @@ def run_virtual_cycles(
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 初始化
-    # 【关键】Spacing 改为 1.0 (无量纲) 以匹配 PFC
+    # 【关键】无量纲设置：Spacing=1.0，材料/断裂参数在 energy.py 中已归一化
     grid = GridSpec(shape=(128, 64, 16), spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
     
     copper = CopperParameters()
