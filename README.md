@@ -47,3 +47,10 @@ python -m sim.tests.virtual_cycle \
 ## 待拓展
 - 增载或延长循环/调韧性与缺陷以触发裂纹局部化；输出能量密度场（弹性能/断裂能）用于裂尖能量分析。
 - 引入多晶/晶界取向场与非周期边界（FFT/FEM 替换 CG）。
+
+## 新增/更新内容（缺陷播种与快速演化验证）
+- 新增 `sim/defects.py`：支持缺陷播种配置（密度、区域、类型概率）、权重场引导播种、折线位错（确定性线段离散）以及各向异性核；输出缺陷掩膜 `defect_mask`/`line_mask`，将播种点平滑成 ψ/裂纹/塑性初值。
+- `Cu111StructureBuilder` 接受 `defect_config`：可用上面的播种器替代旧的随机掩膜；仍兼容原噪声/掩膜流程。
+- 示例脚本 `scripts/generate_seeded_cu.py`：可生成带播种缺陷的 Cu 初值，输出 LAMMPS data/dump 和 VTK（含 `defect_mask` 等），参数包括区域、密度、类型概率、核宽度等。
+- 冒烟演化脚本 `sim/tests/smoke_seeded.py`：初始化播种缺陷后跑少量步长，逐步输出 VTK 序列（含变形坐标）和末步 LAMMPS，便于 ParaView 时间序列查看。
+- 变形坐标：VTK 支持 `deform_coordinates=True`，将宏观应变+微观位移写入坐标；也会输出未变形版本便于对比。

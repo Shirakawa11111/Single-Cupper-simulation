@@ -22,6 +22,7 @@ class DefectSeed:
     position: np.ndarray  # physical coordinates (x, y, z)
     kind: str
     direction: np.ndarray
+    from_line: bool = False
 
 
 @dataclass
@@ -56,6 +57,15 @@ class DefectConfig:
     plastic_amplitude: float = 0.02
     mean_target: float = 0.0
     peak_target: float = 0.25
+
+    # Optional spatial weighting and line-defect support
+    weight_field: np.ndarray | None = None  # same shape as grid; used as sampling weights
+    mask_threshold: float = 0.0  # weights below this are treated as zero
+    line_segments: List[dict] | None = None  # each: {"points": [(x,y,z), ...], "kind": "...", "direction": (optional)}
+    line_step: float | None = None  # step for discretizing line segments; defaults to min spacing
+    line_sigma_along: float = 0.2
+    line_sigma_across: float = 0.05
+    line_weight: float = 1.0
 
 
 def _box_bounds_from_grid(grid: GridSpec) -> Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]:
@@ -105,13 +115,77 @@ def generate_defect_seeds(grid: GridSpec, cfg: DefectConfig, rng: np.random.Gene
     max_allowed = cfg.max_seeds
     if max_allowed is None:
         max_allowed = int(0.5 * np.prod(grid.shape))
-    n_seeds = max(1, min(n_target, max_allowed))
+    n_target = max(1, min(n_target, max_allowed))
+
+    # 1) deterministic line seeds (if any)
+    seeds: List[DefectSeed] = []
+    if cfg.line_segments:
+        step = cfg.line_step or min(grid.spacing)
+        for seg in cfg.line_segments:
+            pts = np.asarray(seg.get("points", []), dtype=float)
+            if pts.shape[0] < 2:
+                continue
+            kind = seg.get("kind", "dislocation")
+            for i in range(len(pts) - 1):
+                p0, p1 = pts[i], pts[i + 1]
+                seg_vec = p1 - p0
+                seg_len = np.linalg.norm(seg_vec)
+                if seg_len < 1e-12:
+                    continue
+                n_sub = max(1, int(np.ceil(seg_len / step)))
+                t = np.linspace(0.0, 1.0, n_sub, endpoint=True)
+                dir_unit = seg_vec / seg_len
+                direction = seg.get("direction")
+                if direction is None:
+                    direction = dir_unit
+                for alpha in t:
+                    pos = p0 + alpha * seg_vec
+                    seeds.append(
+                        DefectSeed(
+                            position=pos,
+                            kind=kind,
+                            direction=np.asarray(direction, dtype=float),
+                            from_line=True,
+                        )
+                    )
+
+    remaining = max(0, n_target - len(seeds))
+    if remaining == 0:
+        return seeds
 
     probs = _normalize_probs(cfg.type_probabilities)
     kinds = list(probs.keys())
     weights = np.array([probs[k] for k in kinds], dtype=float)
-    seeds: List[DefectSeed] = []
-    for _ in range(n_seeds):
+
+    # 2) weighted or uniform sampling for the rest
+    if cfg.weight_field is not None:
+        w = np.array(cfg.weight_field, dtype=float)
+        if w.shape != grid.shape:
+            raise ValueError(f"weight_field shape {w.shape} != grid shape {grid.shape}")
+        mask = w >= cfg.mask_threshold
+        w_masked = np.where(mask, w, 0.0)
+        # Apply region bounds mask
+        coords_x = np.linspace(0, grid.spacing[0] * (grid.shape[0] - 1), grid.shape[0])
+        coords_y = np.linspace(0, grid.spacing[1] * (grid.shape[1] - 1), grid.shape[1])
+        coords_z = np.linspace(0, grid.spacing[2] * (grid.shape[2] - 1), grid.shape[2])
+        X, Y, Z = np.meshgrid(coords_x, coords_y, coords_z, indexing="ij")
+        region_mask = (X >= x0) & (X <= x1) & (Y >= y0) & (Y <= y1) & (Z >= z0) & (Z <= z1)
+        w_masked = np.where(region_mask, w_masked, 0.0)
+        flat = w_masked.ravel()
+        total = flat.sum()
+        if total > 0:
+            p = flat / total
+            idx = rng.choice(flat.size, size=remaining, replace=True, p=p)
+            ix, iy, iz = np.unravel_index(idx, grid.shape)
+            for a, b, c in zip(ix, iy, iz):
+                pos = np.array([a * grid.spacing[0], b * grid.spacing[1], c * grid.spacing[2]])
+                kind = rng.choice(kinds, p=weights)
+                direction = _sample_slip_direction(rng) if (kind == "dislocation" and cfg.orient_mode == "slip_system") else _random_direction(rng)
+                seeds.append(DefectSeed(position=pos, kind=kind, direction=direction))
+            return seeds
+        # fall back to uniform if weights zero
+
+    for _ in range(remaining):
         pos = np.array(
             [
                 rng.uniform(x0, x1),
@@ -169,11 +243,27 @@ def seeds_to_fields(
     psi = np.zeros(grid.shape)
     crack = np.zeros_like(psi)
     plastic = np.zeros_like(psi)
+    defect_mask = np.zeros_like(psi)
+    line_mask = np.zeros_like(psi)
 
     sigma_default = np.array([cfg.sigma_normal, cfg.sigma_normal, cfg.sigma_normal], dtype=float)
     sigma_defect = np.array([cfg.sigma_defect, cfg.sigma_defect, cfg.sigma_defect], dtype=float)
 
     for seed in seeds:
+        defect_mask_idx = (
+            int(round(seed.position[0] / grid.spacing[0])),
+            int(round(seed.position[1] / grid.spacing[1])),
+            int(round(seed.position[2] / grid.spacing[2])),
+        )
+        if (
+            0 <= defect_mask_idx[0] < grid.shape[0]
+            and 0 <= defect_mask_idx[1] < grid.shape[1]
+            and 0 <= defect_mask_idx[2] < grid.shape[2]
+        ):
+            defect_mask[defect_mask_idx] = 1.0
+            if seed.from_line:
+                line_mask[defect_mask_idx] = 1.0
+
         if seed.kind == "vacancy":
             sigma = sigma_defect
             weight = cfg.vacancy_weight
@@ -185,11 +275,21 @@ def seeds_to_fields(
             crack_weight = cfg.crack_amplitude * 0.3
             plastic_weight = cfg.plastic_amplitude * 0.5
         elif seed.kind == "dislocation":
-            # Elongate along slip direction
+            # Elongate along slip direction or provided line anisotropy
             dir_norm = seed.direction / (np.linalg.norm(seed.direction) + 1e-12)
-            anisotropy = np.abs(dir_norm) + 0.5
-            sigma = sigma_defect * anisotropy
-            weight = cfg.dislocation_weight
+            if seed.from_line:
+                sigma = np.array(
+                    [
+                        cfg.line_sigma_along * abs(dir_norm[0]) + cfg.line_sigma_across,
+                        cfg.line_sigma_along * abs(dir_norm[1]) + cfg.line_sigma_across,
+                        cfg.line_sigma_along * abs(dir_norm[2]) + cfg.line_sigma_across,
+                    ]
+                )
+                weight = cfg.line_weight
+            else:
+                anisotropy = np.abs(dir_norm) + 0.5
+                sigma = sigma_defect * anisotropy
+                weight = cfg.dislocation_weight
             crack_weight = cfg.crack_amplitude
             plastic_weight = cfg.plastic_amplitude
         else:
@@ -205,7 +305,10 @@ def seeds_to_fields(
     psi = _rescale_field(psi, cfg.mean_target, cfg.peak_target)
     crack = np.clip(crack, 0.0, 1.0)
     plastic = np.clip(plastic, 0.0, 1.0)
-    return {"psi": psi, "crack": crack, "plastic": plastic}
+    out = {"psi": psi, "crack": crack, "plastic": plastic, "defect_mask": defect_mask}
+    if line_mask.max() > 0:
+        out["line_mask"] = line_mask
+    return out
 
 
 def _rescale_field(field: np.ndarray, mean_target: float, peak_target: float) -> np.ndarray:
