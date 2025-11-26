@@ -30,7 +30,7 @@ python -m sim.tests.virtual_cycle \
 可视化提示：
 - ParaView/Ovito 固定色标，禁用 per-timestep rescale。裂纹用 `crack_clamp03` (0–0.3) 或 `crack_norm` (0–1)；塑性/应力用 0–1；位移查看 `displacement_total`/`disp_total_norm` 或 warp by total displacement。
 
-## 最近更新（对话内已完成）
+## 最近更新
 - 塑性/方向场：新增 `plastic_measures`，机械 von Mises/轴向应变与 PFC 梯度按权重混合（默认机械占比 0.9），输出塑性向量。
 - 方向性裂纹驱动：加载轴塑性分量放大历史能量/驱动力（`dir_coupling` 默认 0.8）。
 - 应力耦合：von Mises 应力归一化后加入 μ_extra，PFC 在高应力区更敏感。
