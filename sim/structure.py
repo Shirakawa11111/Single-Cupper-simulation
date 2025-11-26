@@ -10,6 +10,7 @@ from typing import Dict
 import numpy as np
 
 from .ebsd import VirtualEBSDGenerator
+from .defects import DefectConfig, generate_defect_seeds, seeds_to_fields
 from .io import write_atomic_data, write_lammpstrj
 from .operators import GridSpec
 
@@ -48,6 +49,7 @@ class Cu111StructureBuilder:
         boundary_amplitude: float = 0.3,
         boundary_width: int = 1,
         boundary_misorientation_deg: float = 5.0,
+        defect_config: Dict | None = None,
     ) -> None:
         self.grid = grid
         self.defect_fraction = defect_fraction
@@ -59,6 +61,7 @@ class Cu111StructureBuilder:
         self.boundary_amplitude = boundary_amplitude
         self.boundary_width = max(1, boundary_width)
         self.boundary_misorientation = np.deg2rad(boundary_misorientation_deg)
+        self.defect_config = defect_config
 
     def _build_orientation(self) -> np.ndarray:
         """Construct orientation field from provided inputs or default [111]."""
@@ -159,24 +162,32 @@ class Cu111StructureBuilder:
         orientation = self._build_orientation()
         rng = np.random.default_rng(seed)
 
-        # random defects
-        mask = np.zeros(self.grid.shape)
-        if self.defect_fraction > 0:
-            generator = VirtualEBSDGenerator(self.grid.shape, self.defect_fraction)
-            mask = generator.defect_mask(seed)
+        use_seeded_defects = self.defect_config is not None and len(self.defect_config) > 0
+        if use_seeded_defects:
+            cfg = DefectConfig(**self.defect_config)
+            seeds = generate_defect_seeds(self.grid, cfg, rng)
+            seeded = seeds_to_fields(self.grid, seeds, cfg)
+            # add a small noise floor for numerical stability
+            psi = seeded["psi"] + self.noise * rng.standard_normal(self.grid.shape)
+            crack = seeded["crack"]
+            plastic = seeded["plastic"]
+        else:
+            mask = np.zeros(self.grid.shape)
+            if self.defect_fraction > 0:
+                generator = VirtualEBSDGenerator(self.grid.shape, self.defect_fraction)
+                mask = generator.defect_mask(seed)
 
-        # grain-boundary defects
-        boundary_mask = np.zeros(self.grid.shape)
-        if self.boundary_amplitude > 0:
-            boundary_mask = self._grain_boundary_mask(orientation)
+            boundary_mask = np.zeros(self.grid.shape)
+            if self.boundary_amplitude > 0:
+                boundary_mask = self._grain_boundary_mask(orientation)
 
-        rng = np.random.default_rng(seed)
-        psi = (
-            self.noise * rng.standard_normal(self.grid.shape)
-            + self.defect_amplitude * mask
-            + self.boundary_amplitude * boundary_mask
-        )
-        crack = np.zeros(self.grid.shape)
-        plastic = mask * 0.0
+            psi = (
+                self.noise * rng.standard_normal(self.grid.shape)
+                + self.defect_amplitude * mask
+                + self.boundary_amplitude * boundary_mask
+            )
+            crack = np.zeros(self.grid.shape)
+            plastic = mask * 0.0
+
         fields = {"psi": psi, "crack": crack, "plastic": plastic}
         return Cu111Structure(self.grid, fields, orientation)
