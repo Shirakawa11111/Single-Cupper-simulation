@@ -54,6 +54,8 @@ def run_virtual_cycles(
     crack_relax: float = 0.05,          # 裂纹松弛系数（默认较高便于萌生）
     dir_coupling: float = 1.0,          # 方向性增益
     plastic_relax: float = 0.2,         # 塑性松弛
+    poisson_ratio: float = 0.34,        # 泊松比，用于宏观应变的侧向收缩
+    toughness_scale: float = 1.0,       # 韧性缩放因子 (<1 降低 Gc 促开裂；>1 提高韧性)
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 初始化
@@ -61,7 +63,14 @@ def run_virtual_cycles(
     grid = GridSpec(shape=(128, 64, 16), spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
     
     copper = CopperParameters()
-    fracture = FractureParameters()
+    base_fracture = FractureParameters()
+    fracture = FractureParameters(
+        gc=base_fracture.gc * toughness_scale,
+        l0=base_fracture.l0,
+        k=base_fracture.k,
+        epsilon_half=base_fracture.epsilon_half,
+        gres=base_fracture.gres * toughness_scale,
+    )
     pfc_params = PFCParameters()
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
     energy = FreeEnergy(copper, fracture, coupling)
@@ -96,7 +105,14 @@ def run_virtual_cycles(
         print(f"[Pre-relax] steps={pre_relax_steps}, strain={pre_relax_strain}")
         # 初始化一次 solver 与状态
         copper = CopperParameters()
-        fracture = FractureParameters()
+        base_fracture = FractureParameters()
+        fracture = FractureParameters(
+            gc=base_fracture.gc * toughness_scale,
+            l0=base_fracture.l0,
+            k=base_fracture.k,
+            epsilon_half=base_fracture.epsilon_half,
+            gres=base_fracture.gres * toughness_scale,
+        )
         pfc_params = PFCParameters()
         coupling = PFCCoupling(pfc_params, fracture, mode="density")
         energy = FreeEnergy(copper, fracture, coupling)
@@ -150,7 +166,8 @@ def run_virtual_cycles(
             for step in range(1, segment_steps + 1):
                 alpha = step / segment_steps
                 current_strain = target_start + (target_end - target_start) * alpha
-                energy_val = solver.step((current_strain, 0.0, 0.0))
+                macro = (current_strain, -poisson_ratio * current_strain, -poisson_ratio * current_strain)
+                energy_val = solver.step(macro)
                 plast_mean = solver.state["plastic"].mean()
                 plastic_min = min(plastic_min, plast_mean)
                 plastic_max = max(plastic_max, plast_mean)
@@ -171,7 +188,7 @@ def run_virtual_cycles(
                                 "displacement": solver.state["displacement"],
                                 "stress_vm": solver.state["stress_vm"],
                             },
-                            macro_strain=(current_strain, 0.0, 0.0),
+                            macro_strain=macro,
                             deform_coordinates=True,
                         )
 
@@ -188,7 +205,7 @@ def run_virtual_cycles(
                 grid,
                 solver.state,
                 cycle,
-                macro_strain=(current_strain, 0.0, 0.0),
+                macro_strain=macro,
             )
 
         # Early stop if failed
