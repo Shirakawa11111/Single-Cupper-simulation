@@ -78,9 +78,11 @@ Here $H$ stores the maximum tensile elastic energy density seen so far, $\epsilo
 
 \section{Numerical Workflow}
 \begin{enumerate}
-    \item \textbf{Structure generation}: `Cu111StructureBuilder` constructs grids (32$\times$32$\times$16, spacing $5\times10^{-7}$~m) with $[111]$ orientation and random defects for testing; EBSD data can replace the synthetic mask in future runs.
+    \item \textbf{Structure generation}: `Cu111StructureBuilder` constructs grids (32$\times$32$\times$16, spacing $5\times10^{-7}$~m) with $[111]$ orientation and random defects for testing; EBSD data can replace the synthetic mask in future runs. Defect seeding uses weighted/random seeds (and optional line defects) projected via anisotropic Gaussians to $\psi$/crack/plastic; optional notch boxes pre-set high crack values as starters.
     \item \textbf{Alternating solver}: The cyclic load path is triangular $0\rightarrow +\varepsilon_{\max}\rightarrow 0 \rightarrow -\varepsilon_{\max}\rightarrow 0$, each segment subdivided into $N_{\text{seg}}$ steps. At every increment: solve mechanical equilibrium (CG); blend mechanical/PFC plastic surrogates and relax plastic scalar + directional vector; update crack with anisotropic boost; advance PFC with optional stress-coupled $\mu_{\text{extra}}$.
-    \item \textbf{Outputs}: Every few steps dump VTK frames; after each cycle dump LAMMPS and optional `.data` snapshots. Scalar/vector fields include crack, plastic (scalar + directional), $\psi$, stress (tensor and von Mises), and displacement. CSV logs store per-cycle energy, mean crack/plastic, crack increment, and plastic range; runs stop early if $\langle\phi\rangle$ exceeds a failure threshold.
+    \item \textbf{Macro strain with Poisson contraction}: Applied strain is $(\varepsilon, -\nu \varepsilon, -\nu \varepsilon)$ (default $\nu=0.34$ for Cu); the same macro strain is used in PFC $k$-update, VTK warp, and LAMMPS dump.
+    \item \textbf{Toughness scaling}: A scalar $s_{\mathrm{Gc}}$ rescales $g_c$ and $g_{\mathrm{res}}$ (e.g., $s<1$ to promote cracking), leaving $\ell_0,k,\epsilon_{1/2}$ unchanged.
+    \item \textbf{Outputs}: Every few steps dump VTK frames (deformed coordinates) and after each cycle dump LAMMPS and optional `.data` snapshots. Scalar/vector fields include crack, plastic (scalar + directional), $\psi$, stress (tensor and von Mises), displacement, and masks (defect/line/notch). CSV logs store per-cycle energy, mean crack/plastic, crack increment, and plastic range; runs stop early if $\langle\phi\rangle$ exceeds a failure threshold.
     \item \textbf{Fatigue metrics}: Fit crack increment per cycle vs cycle count (Paris-like slope) and plastic strain range vs $2N$ (Coffin--Manson slope) from the logged series.
 \end{enumerate}
 

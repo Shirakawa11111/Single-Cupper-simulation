@@ -54,3 +54,4 @@ python -m sim.tests.virtual_cycle \
 - 示例脚本 `scripts/generate_seeded_cu.py`：可生成带播种缺陷的 Cu 初值，输出 LAMMPS data/dump 和 VTK（含 `defect_mask` 等），参数包括区域、密度、类型概率、核宽度等。
 - 冒烟演化脚本 `sim/tests/smoke_seeded.py`：初始化播种缺陷后跑少量步长，逐步输出 VTK 序列（含变形坐标）和末步 LAMMPS，便于 ParaView 时间序列查看。
 - 变形坐标：VTK 支持 `deform_coordinates=True`，将宏观应变+微观位移写入坐标；也会输出未变形版本便于对比。
+- 疲劳主脚本 `sim/tests/virtual_cycle.py` 增强：支持缺陷播种输入、缺口种子（notch_box）、预演化步（pre_relax）让缺陷/滑移带先成形；宏观应变包含泊松收缩 (ε, -ν ε, -ν ε)；可选应力耦合到 PFC (`stress_mu_weight`)；韧性缩放 `toughness_scale` 便于促开裂/稳健性调参；逐步 VTK/LAMMPS 输出使用一致的宏观应变。
