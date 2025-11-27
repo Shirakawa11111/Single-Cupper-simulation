@@ -44,6 +44,10 @@ def run_virtual_cycles(
     data_output: Path | None = None,
     dump_dir: Path | None = None,
     vtk_dir: Path | None = None,
+    defect_config: dict | None = None,  # 缺陷播种配置（传给 Cu111StructureBuilder.defect_config）
+    initial_vtk: Path | None = None,    # 可选：输出播种后的初始 VTK（含 deform_coordinates=False）
+    pre_relax_steps: int = 0,           # 可选：载荷前的短暂预演化步数，形成更清晰的缺陷/滑移带
+    pre_relax_strain: float = 0.0,      # 预演化时施加的宏观应变（通常为 0）
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 初始化
@@ -56,10 +60,43 @@ def run_virtual_cycles(
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
     energy = FreeEnergy(copper, fracture, coupling)
     
-    builder = Cu111StructureBuilder(grid, defect_fraction=0.08, defect_amplitude=0.12)
+    builder = Cu111StructureBuilder(
+        grid,
+        defect_fraction=0.08 if not defect_config else 0.0,
+        defect_amplitude=0.12 if not defect_config else 0.0,
+        defect_config=defect_config,
+    )
     structure = builder.build(seed=42)
     
     mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
+    if initial_vtk:
+        initial_vtk.parent.mkdir(parents=True, exist_ok=True)
+        write_vtk(initial_vtk, grid, structure.fields, macro_strain=(0.0, 0.0, 0.0), deform_coordinates=False)
+
+    # 短暂预演化：在载荷前让 ψ/裂纹/塑性更“尖锐”
+    if pre_relax_steps > 0:
+        print(f"[Pre-relax] steps={pre_relax_steps}, strain={pre_relax_strain}")
+        # 初始化一次 solver 与状态
+        copper = CopperParameters()
+        fracture = FractureParameters()
+        pfc_params = PFCParameters()
+        coupling = PFCCoupling(pfc_params, fracture, mode="density")
+        energy = FreeEnergy(copper, fracture, coupling)
+        mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
+        pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
+        solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.01, plastic_relax=0.2, mech_plastic_weight=0.9, dir_coupling=0.8)
+        solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg)
+        solver.initialize_state(structure.orientation, seed=42)
+        for key, value in structure.fields.items():
+            solver.state[key] = value.copy()
+        solver.state["history"] = np.zeros_like(structure.fields["psi"])
+        for s in range(pre_relax_steps):
+            solver.step((pre_relax_strain, 0.0, 0.0))
+        # 将预演化后的场作为新的初值
+        for key in structure.fields.keys():
+            structure.fields[key] = solver.state[key].copy()
+        if initial_vtk:
+            write_vtk(initial_vtk.with_name(initial_vtk.stem + "_prerelax.vtk"), grid, structure.fields, macro_strain=(0.0, 0.0, 0.0), deform_coordinates=False)
     # 为避免 ψ 振幅溢出，开启温和截断
     # 应力耦合项：使用 von Mises 应力场放大 μ
     def mu_extra_from_stress(stress_vm):
@@ -193,5 +230,9 @@ if __name__ == "__main__":
         vtk_dir=Path("sim/tests/virtual_cycle_vtk"),
         cycles=1,
         max_strain=0.08,
-        segment_steps=100
+        segment_steps=100,
+        defect_config=None,
+        initial_vtk=Path("sim/tests/virtual_cycle_vtk/initial_seeded.vtk"),
+        pre_relax_steps=0,
+        pre_relax_strain=0.0,
     )
