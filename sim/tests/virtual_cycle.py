@@ -48,6 +48,12 @@ def run_virtual_cycles(
     initial_vtk: Path | None = None,    # 可选：输出播种后的初始 VTK（含 deform_coordinates=False）
     pre_relax_steps: int = 0,           # 可选：载荷前的短暂预演化步数，形成更清晰的缺陷/滑移带
     pre_relax_strain: float = 0.0,      # 预演化时施加的宏观应变（通常为 0）
+    notch_box: tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None = None,  # 可选：在区域内预置裂纹/notch
+    notch_crack_value: float = 0.6,     # notch 区域内的初始裂纹值
+    stress_mu_weight: float = 0.5,      # von Mises 应力归一化后乘此系数作为 μ_extra，<=0 则关闭
+    crack_relax: float = 0.05,          # 裂纹松弛系数（默认较高便于萌生）
+    dir_coupling: float = 1.0,          # 方向性增益
+    plastic_relax: float = 0.2,         # 塑性松弛
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 初始化
@@ -67,6 +73,18 @@ def run_virtual_cycles(
         defect_config=defect_config,
     )
     structure = builder.build(seed=42)
+
+    # 可选：预置 notch/裂纹种子
+    if notch_box is not None:
+        (x0, x1), (y0, y1), (z0, z1) = notch_box
+        dx, dy, dz = grid.spacing
+        nx, ny, nz = grid.shape
+        xs = np.linspace(0, dx * (nx - 1), nx)
+        ys = np.linspace(0, dy * (ny - 1), ny)
+        zs = np.linspace(0, dz * (nz - 1), nz)
+        X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+        mask = (X >= x0) & (X <= x1) & (Y >= y0) & (Y <= y1) & (Z >= z0) & (Z <= z1)
+        structure.fields["crack"][mask] = np.clip(notch_crack_value, 0.0, 1.0)
     
     mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
     if initial_vtk:
@@ -84,8 +102,11 @@ def run_virtual_cycles(
         energy = FreeEnergy(copper, fracture, coupling)
         mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
         pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
-        solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.01, plastic_relax=0.2, mech_plastic_weight=0.9, dir_coupling=0.8)
-        solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg)
+        solver_cfg = SolverConfig(dt=5e-3, crack_relax=crack_relax, plastic_relax=plastic_relax, mech_plastic_weight=0.9, dir_coupling=dir_coupling)
+        mu_extra = None
+        if stress_mu_weight > 0:
+            mu_extra = lambda svm: stress_mu_weight * svm / (np.max(np.abs(svm)) + 1e-12)
+        solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg, mu_extra_from_stress=mu_extra)
         solver.initialize_state(structure.orientation, seed=42)
         for key, value in structure.fields.items():
             solver.state[key] = value.copy()
@@ -97,19 +118,13 @@ def run_virtual_cycles(
             structure.fields[key] = solver.state[key].copy()
         if initial_vtk:
             write_vtk(initial_vtk.with_name(initial_vtk.stem + "_prerelax.vtk"), grid, structure.fields, macro_strain=(0.0, 0.0, 0.0), deform_coordinates=False)
-    # 为避免 ψ 振幅溢出，开启温和截断
-    # 应力耦合项：使用 von Mises 应力场放大 μ
-    def mu_extra_from_stress(stress_vm):
-        # 归一化后乘一个系数增强驱动
-        max_vm = np.max(np.abs(stress_vm)) + 1e-12
-        norm_vm = stress_vm / max_vm
-        return 0.5 * norm_vm
-
     # pfc_extra_mu 将在 solver 内传入
     pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
-    solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.01, plastic_relax=0.2, mech_plastic_weight=0.9, dir_coupling=0.8)
-    
-    solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg)
+    solver_cfg = SolverConfig(dt=5e-3, crack_relax=crack_relax, plastic_relax=plastic_relax, mech_plastic_weight=0.9, dir_coupling=dir_coupling)
+    mu_extra = None
+    if stress_mu_weight > 0:
+        mu_extra = lambda svm: stress_mu_weight * svm / (np.max(np.abs(svm)) + 1e-12)
+    solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg, mu_extra_from_stress=mu_extra)
     solver.initialize_state(structure.orientation, seed=42)
     for key, value in structure.fields.items():
         solver.state[key] = value.copy()
