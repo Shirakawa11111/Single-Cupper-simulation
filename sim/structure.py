@@ -9,6 +9,7 @@ from typing import Dict
 
 import numpy as np
 
+from scipy.ndimage import gaussian_gradient_magnitude
 from .ebsd import VirtualEBSDGenerator
 from .defects import DefectConfig, generate_defect_seeds, seeds_to_fields
 from .io import write_atomic_data, write_lammpstrj
@@ -20,6 +21,7 @@ class Cu111Structure:
     grid: GridSpec
     fields: Dict[str, np.ndarray]
     orientation: np.ndarray
+    grain_mask: np.ndarray | None = None
 
     def export(self, data_path, dump_path, timestep: int = 0) -> None:
         write_atomic_data(data_path, self.grid)
@@ -158,9 +160,25 @@ class Cu111StructureBuilder:
             boundary = expanded
         return boundary.astype(float)
 
+    def _grain_boundary_mask_from_orientation(self, orientation: np.ndarray, sigma: float = 1.0, threshold: float = 0.1) -> np.ndarray:
+        """
+        Approximate grain boundary mask from orientation gradients.
+        Uses a Gaussian-smoothed gradient magnitude of orientation vectors.
+        """
+        # use orientation as 9-component field
+        comps = [orientation[..., i, j] for i in range(3) for j in range(3)]
+        grad_mag_sum = np.zeros(self.grid.shape)
+        for comp in comps:
+            gm = gaussian_gradient_magnitude(comp, sigma=sigma)
+            grad_mag_sum += gm
+        norm = grad_mag_sum / (np.max(grad_mag_sum) + 1e-12)
+        mask = (norm > threshold).astype(float)
+        return mask
+
     def build(self, seed: int = 0) -> Cu111Structure:
         orientation = self._build_orientation()
         rng = np.random.default_rng(seed)
+        grain_mask = self._grain_boundary_mask_from_orientation(orientation, sigma=1.0, threshold=0.1)
 
         use_seeded_defects = self.defect_config is not None and len(self.defect_config) > 0
         if use_seeded_defects:
@@ -190,4 +208,4 @@ class Cu111StructureBuilder:
             plastic = mask * 0.0
 
         fields = {"psi": psi, "crack": crack, "plastic": plastic}
-        return Cu111Structure(self.grid, fields, orientation)
+        return Cu111Structure(self.grid, fields, orientation, grain_mask=grain_mask)

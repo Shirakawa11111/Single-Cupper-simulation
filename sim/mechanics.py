@@ -63,21 +63,25 @@ class MechanicalEquilibriumSolver:
         displacement: Array,
         crack: Array,
         macro_strain: Tuple[float, float, float],
+        plastic_strain: Array | None = None,
     ) -> Tuple[Array, Array, Array]:
         mask = (1.0 - crack)[..., None, None]
         macro = np.zeros(crack.shape + (3, 3))
         for i in range(3):
             macro[..., i, i] = macro_strain[i]
+        if plastic_strain is None:
+            plastic_strain = np.zeros_like(macro)
 
         def matvec(vec: np.ndarray) -> np.ndarray:
             u = vec.reshape(crack.shape + (3,))
             strain = sym_grad(u, self.spacing)
-            stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, strain, optimize=True)
+            strain_eff = strain - plastic_strain
+            stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_eff, optimize=True)
             stress *= mask
             divsigma = divergence(stress, self.spacing)
             return divsigma.reshape(-1)
 
-        rhs_stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, macro, optimize=True)
+        rhs_stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, macro - plastic_strain, optimize=True)
         rhs_stress *= mask
         rhs = -divergence(rhs_stress, self.spacing).reshape(-1)
         linop = LinearOperator((self.num_dofs, self.num_dofs), matvec)
@@ -89,7 +93,8 @@ class MechanicalEquilibriumSolver:
             u = solution.reshape(crack.shape + (3,))
 
         total_strain = sym_grad(u, self.spacing) + macro
-        stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, total_strain, optimize=True)
+        strain_eff = total_strain - plastic_strain
+        stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_eff, optimize=True)
         stress *= mask
         return u, total_strain, stress
 

@@ -56,6 +56,7 @@ def run_virtual_cycles(
     plastic_relax: float = 0.2,         # 塑性松弛
     poisson_ratio: float = 0.34,        # 泊松比，用于宏观应变的侧向收缩
     toughness_scale: float = 1.0,       # 韧性缩放因子 (<1 降低 Gc 促开裂；>1 提高韧性)
+    stress_strain_csv: Path | None = None,  # 可选：逐步输出宏观应力-应变曲线
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 初始化
@@ -122,7 +123,9 @@ def run_virtual_cycles(
         mu_extra = None
         if stress_mu_weight > 0:
             mu_extra = lambda svm: stress_mu_weight * svm / (np.max(np.abs(svm)) + 1e-12)
-        solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg, mu_extra_from_stress=mu_extra)
+        solver = AlternatingSolver(
+            coupling, energy, mechanical, pfc, solver_cfg, mu_extra_from_stress=mu_extra, grain_mask=structure.grain_mask
+        )
         solver.initialize_state(structure.orientation, seed=42)
         for key, value in structure.fields.items():
             solver.state[key] = value.copy()
@@ -140,7 +143,9 @@ def run_virtual_cycles(
     mu_extra = None
     if stress_mu_weight > 0:
         mu_extra = lambda svm: stress_mu_weight * svm / (np.max(np.abs(svm)) + 1e-12)
-    solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg, mu_extra_from_stress=mu_extra)
+    solver = AlternatingSolver(
+        coupling, energy, mechanical, pfc, solver_cfg, mu_extra_from_stress=mu_extra, grain_mask=structure.grain_mask
+    )
     solver.initialize_state(structure.orientation, seed=42)
     for key, value in structure.fields.items():
         solver.state[key] = value.copy()
@@ -149,6 +154,7 @@ def run_virtual_cycles(
     results: List[CycleResult] = []
     current_strain = 0.0
     frame_id = 0
+    stress_strain_log = []
 
     # 2. 循环加载
     min_strain = -max_strain if min_strain is None else min_strain
@@ -171,6 +177,12 @@ def run_virtual_cycles(
                 plast_mean = solver.state["plastic"].mean()
                 plastic_min = min(plastic_min, plast_mean)
                 plastic_max = max(plastic_max, plast_mean)
+                stress_tensor = solver.state["stress"]
+                stress_mean = np.mean(stress_tensor, axis=(0, 1, 2))
+                stress_vm_mean = float(np.mean(solver.state.get("stress_vm", 0.0)))
+                stress_strain_log.append(
+                    (current_strain, stress_mean[0, 0], stress_mean[1, 1], stress_mean[2, 2], stress_vm_mean)
+                )
 
                 if step % 5 == 0:
                     frame_id += 1
@@ -239,13 +251,19 @@ def run_virtual_cycles(
         if mask.any():
             coffman = float(np.polyfit(np.log(pr[mask]), np.log(2 * cycles_arr[mask]), 1)[0])
 
-    if csv_output:
-        csv_output.parent.mkdir(parents=True, exist_ok=True)
-        with csv_output.open("w", encoding="utf-8") as fh:
-            fh.write("cycle,energy,crack_mean,plastic_mean,crack_delta,plastic_range\n")
-            prev_crack = results[0].crack_mean if results else 0.0
-            for r, pd, pr in zip(results, crack_deltas, plastic_ranges):
-                fh.write(f"{r.cycle},{r.load:.6e},{r.crack_mean:.6e},{r.plastic_mean:.6e},{pd:.6e},{pr:.6e}\n")
+        if csv_output:
+            csv_output.parent.mkdir(parents=True, exist_ok=True)
+            with csv_output.open("w", encoding="utf-8") as fh:
+                fh.write("cycle,energy,crack_mean,plastic_mean,crack_delta,plastic_range\n")
+                prev_crack = results[0].crack_mean if results else 0.0
+                for r, pd, pr in zip(results, crack_deltas, plastic_ranges):
+                    fh.write(f"{r.cycle},{r.load:.6e},{r.crack_mean:.6e},{r.plastic_mean:.6e},{pd:.6e},{pr:.6e}\n")
+        if stress_strain_csv and stress_strain_log:
+            stress_strain_csv.parent.mkdir(parents=True, exist_ok=True)
+            with stress_strain_csv.open("w", encoding="utf-8") as fh:
+                fh.write("macro_strain,sig_xx,sig_yy,sig_zz,sig_vm\n")
+                for row in stress_strain_log:
+                    fh.write(",".join(f"{v:.6e}" for v in row) + "\n")
 
     if data_output:
         data_output.parent.mkdir(parents=True, exist_ok=True)
@@ -267,4 +285,5 @@ if __name__ == "__main__":
         initial_vtk=Path("sim/tests/virtual_cycle_vtk/initial_seeded.vtk"),
         pre_relax_steps=0,
         pre_relax_strain=0.0,
+        stress_strain_csv=Path("sim/tests/virtual_cycle_stress_strain.csv"),
     )

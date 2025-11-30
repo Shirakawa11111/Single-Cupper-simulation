@@ -45,6 +45,7 @@ class AlternatingSolver:
         pfc: PFCEvolver,
         config: SolverConfig | None = None,
         mu_extra_from_stress: callable | None = None,
+        grain_mask: Array | None = None,
     ) -> None:
         self.coupling = coupling
         self.energy = energy
@@ -52,6 +53,7 @@ class AlternatingSolver:
         self.pfc = pfc
         self.config = config or SolverConfig()
         self.mu_extra_from_stress = mu_extra_from_stress
+        self.grain_mask = grain_mask
         self.state: Dict[str, Array] = {}
 
     def initialize_state(self, orientation_field: Array, seed: int = 0) -> None:
@@ -63,11 +65,13 @@ class AlternatingSolver:
         history = np.zeros_like(psi)
         stress = np.zeros(psi.shape + (3, 3))
         stress_vm = np.zeros_like(psi)
+        plastic_tensor = np.zeros(psi.shape + (3, 3))
         self.state = {
             "psi": psi,
             "crack": crack,
             "plastic": plastic,
             "plastic_vec": plastic_vec,
+            "plastic_tensor": plastic_tensor,
             "displacement": displacement,
             "history": history,
             "stress": stress,
@@ -81,15 +85,16 @@ class AlternatingSolver:
         crack = self.state["crack"]
         plastic = self.state["plastic"]
         plastic_vec = self.state["plastic_vec"]
+        plastic_tensor = self.state.get("plastic_tensor", np.zeros(psi.shape + (3, 3)))
         displacement = self.state["displacement"]
         history = self.state["history"]
 
         # 1. 力学求解
-        displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain)
+        displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain, plastic_strain=plastic_tensor)
         stress_vm = von_mises(stress)
 
         # 2. 塑性场更新
-        eps_eq, eps_vec = self.coupling.plastic_measures(
+        eps_eq, eps_vec, epsp_tensor = self.coupling.plastic_measures(
             psi,
             plastic,
             plastic_vec,
@@ -133,13 +138,16 @@ class AlternatingSolver:
                 "crack": crack,
                 "plastic": plastic,
                 "plastic_vec": plastic_vec,
+                "plastic_tensor": epsp_tensor,
                 "displacement": displacement,
                 "history": history,
                 "stress": stress,
                 "stress_vm": stress_vm,
             }
         )
-        total_E = self.energy.total_energy(strain, crack, psi, self.mechanical.stiffness, plastic)
+        total_E = self.energy.total_energy(
+            strain, crack, psi, self.mechanical.stiffness, plastic, grain_mask=self.grain_mask
+        )
         return total_E
 
 
