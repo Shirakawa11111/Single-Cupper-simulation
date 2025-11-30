@@ -60,6 +60,7 @@ class CopperParameters:
     slip_resistance: float = 1.188e-3  # 200 MPa / 168.4 GPa
     hardening_modulus: float = 5.94e-5  # 10 MPa / 168.4 GPa
     hardening_b: float = 8.0
+    residual_stiffness: float = 1e-6  # crack residual stiffness
 
     def stiffness_tensor(self, rotation: Array | None = None) -> Array:
         """Return 3x3x3x3 stiffness tensor, rotated if orientation provided."""
@@ -112,11 +113,43 @@ class PFCCoupling:
         fracture: FractureParameters,
         mode: Literal["density", "plastic"] = "density",
         constraint: Constraint | None = None,
+        yield_tau: float = 0.02,
+        flow_scale: float = 50.0,
     ) -> None:
         self.pfc_params = pfc_params
         self.fracture = fracture
         self.mode = mode
         self.constraint = constraint or VolumeConstraint()
+        self.yield_tau = yield_tau
+        self.flow_scale = flow_scale
+        # Precompute valid FCC slip systems (n, m) with m·n=0
+        normals = np.array(
+            [
+                [1, 1, 1],
+                [1, 1, -1],
+                [1, -1, 1],
+                [-1, 1, 1],
+            ],
+            dtype=float,
+        )
+        dirs = np.array(
+            [
+                [0, 1, -1],
+                [0, 1, 1],
+                [1, 0, -1],
+                [1, 0, 1],
+                [1, -1, 0],
+                [1, 1, 0],
+            ],
+            dtype=float,
+        )
+        normals = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-12)
+        dirs = dirs / (np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-12)
+        self.slip_systems = []
+        for n in normals:
+            for m in dirs:
+                if np.abs(np.dot(m, n)) < 1e-6:  # ensure orthogonality
+                    self.slip_systems.append((m, n))
 
     def initialize_density(self, shape: Tuple[int, ...], seed: int = 0) -> Array:
         rng = np.random.default_rng(seed)
@@ -156,30 +189,6 @@ class PFCCoupling:
         comp_pfc = [np.clip(np.abs(g) / max_comp, 0.0, 1.0) for g in grad]
 
         # --- Mechanical-based measures using RSS on FCC slip systems ---
-        # FCC {111}<110> slip systems: normals and slip directions
-        normals = np.array(
-            [
-                [1, 1, 1],
-                [1, 1, -1],
-                [1, -1, 1],
-                [-1, 1, 1],
-            ],
-            dtype=float,
-        )
-        dirs = np.array(
-            [
-                [0, 1, -1],
-                [0, 1, 1],
-                [1, 0, -1],
-                [1, 0, 1],
-                [1, -1, 0],
-                [1, 1, 0],
-            ],
-            dtype=float,
-        )
-        normals = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + 1e-12)
-        dirs = dirs / (np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-12)
-
         eps_eq_mech = np.zeros_like(psi)
         comp_mech = [np.zeros_like(psi) for _ in range(3)]
         epsp_tensor = np.zeros(psi.shape + (3, 3))
@@ -189,33 +198,41 @@ class PFCCoupling:
             # For each slip system, compute RSS = m · (strain · n)
             rss_list = []
             mn_list = []
-            for n in normals:
-                for m in dirs:
-                    mn = np.outer(m, n)
-                    mn_list.append(mn)
-                    proj = np.einsum("...ij,ij->...", strain, mn, optimize=True)
-                    rss_list.append(np.abs(proj))
+            proj_signs = []
+            for m, n in self.slip_systems:
+                mn = np.outer(m, n)
+                mn_list.append(mn)
+                proj = np.einsum("...ij,ij->...", strain, mn, optimize=True)
+                rss_list.append(np.abs(proj))
+                proj_signs.append(np.sign(proj))
             rss_stack = np.stack(rss_list, axis=0)
             rss_max = np.max(rss_stack, axis=0)
             max_rss_global = np.max(rss_max) + 1e-12
-            eps_eq_mech = np.clip(rss_max / max_rss_global, 0.0, 1.0)
+            rss_norm = rss_max / max_rss_global
+            # yield-like cutoff: below yield_tau no plastic flow
+            flow = np.clip((rss_norm - self.yield_tau) / (1.0 - self.yield_tau), 0.0, 1.0)
+            flow_scaled = flow * self.flow_scale
+            eps_eq_mech = np.clip(flow_scaled, 0.0, 1.0)
             # Directional: use the slip system achieving max RSS
             idx_max = np.argmax(rss_stack, axis=0)
-            # Map index back to slip direction (m) component
-            dir_components = np.array([mn_list[k][0, 0] for k in range(len(mn_list))]), np.array(
-                [mn_list[k][1, 1] for k in range(len(mn_list))]
-            ), np.array([mn_list[k][2, 2] for k in range(len(mn_list))])
-            # Simpler: use strain principal direction as fallback
             comp_mech = [np.zeros_like(psi) for _ in range(3)]
+            # Build directional vector from winning slip direction components
+            for k, (m, n) in enumerate(self.slip_systems):
+                selector = (idx_max == k)
+                if np.any(selector):
+                    comp_mech[0][selector] = np.abs(m[0])
+                    comp_mech[1][selector] = np.abs(m[1])
+                    comp_mech[2][selector] = np.abs(m[2])
             # Build a plastic strain proxy tensor from the winning slip system mn
-            # For simplicity, assign epsp_tensor = rss_max * sym(m⊗n)
+            # For simplicity, assign epsp_tensor = flow * sign(proj) * sym(m⊗n)
             epsp_tensor = np.zeros_like(strain)
             for k in range(len(mn_list)):
                 selector = (idx_max == k)
                 if np.any(selector):
                     mn = mn_list[k]
                     sym_mn = 0.5 * (mn + mn.T)
-                    epsp_tensor[selector] = rss_max[selector][..., None, None] * sym_mn
+                    sign_k = proj_signs[k]
+                    epsp_tensor[selector] = flow_scaled[selector][..., None, None] * sym_mn * sign_k[selector][..., None, None]
 
         # Blend mechanical and PFC contributions for scalar/directional proxies
         eps_eq = mech_weight * eps_eq_mech + (1.0 - mech_weight) * eps_eq_pfc
@@ -224,7 +241,7 @@ class PFCCoupling:
         ]
         eps_vec = np.stack(comp_blend, axis=-1)
 
-        eps_eq = np.nan_to_num(eps_eq)
+        eps_eq = np.clip(np.nan_to_num(eps_eq), 0.0, 1.0)
         eps_vec = np.nan_to_num(eps_vec)
         epsp_tensor = np.nan_to_num(epsp_tensor)
         return eps_eq, eps_vec, epsp_tensor
@@ -236,8 +253,10 @@ class PFCCoupling:
         grain_mask: Array | None = None,
         grain_scale: float = 0.5,
     ) -> Array:
-        eps, _, _ = self.plastic_measures(psi, plastic_eq, None)
-        x = eps / self.fracture.epsilon_half
+        # plastic_eq 应传入累积等效塑性；若为空则回退到 PFC proxy
+        if plastic_eq is None:
+            plastic_eq, _, _ = self.plastic_measures(psi, None, None)
+        x = plastic_eq / self.fracture.epsilon_half
         term = 0.5 - self.fracture.gres * np.tanh(2 * (x - 1.0))
         gc_eff = self.fracture.gc * (term + 0.5 + self.fracture.gres)
         if grain_mask is not None:
@@ -292,9 +311,11 @@ class FreeEnergy:
         stiffness: Array,
         plastic_eq: Array | None = None,
         grain_mask: Array | None = None,
+        plastic_tensor: Array | None = None,
     ) -> float:
         toughness = self.pfc.degraded_toughness(psi, plastic_eq, grain_mask=grain_mask)
-        elastic = self.elastic_energy(strain, crack, stiffness)
+        strain_eff = strain if plastic_tensor is None else strain - plastic_tensor
+        elastic = self.elastic_energy(strain_eff, crack, stiffness)
         crack_e = self.crack_energy(crack, toughness)
         pfc_e = self.pfc_energy(psi)
         return float(np.sum(elastic + crack_e + pfc_e))

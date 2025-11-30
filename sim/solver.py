@@ -59,17 +59,17 @@ class AlternatingSolver:
     def initialize_state(self, orientation_field: Array, seed: int = 0) -> None:
         psi = self.coupling.initialize_density(orientation_field.shape[:-2], seed)
         crack = np.zeros_like(psi)
-        plastic = np.zeros_like(psi)
-        plastic_vec = np.zeros(psi.shape + (3,))
+        plastic_eq = np.zeros_like(psi)  # accumulated equivalent plastic strain (for toughness degradation)
+        plastic_vec = np.zeros(psi.shape + (3,))  # current directional surrogate (bounded 0-1)
         displacement = np.zeros(psi.shape + (3,))
         history = np.zeros_like(psi)
         stress = np.zeros(psi.shape + (3, 3))
         stress_vm = np.zeros_like(psi)
-        plastic_tensor = np.zeros(psi.shape + (3, 3))
+        plastic_tensor = np.zeros(psi.shape + (3, 3))  # accumulated plastic tensor (eigenstrain)
         self.state = {
             "psi": psi,
             "crack": crack,
-            "plastic": plastic,
+            "plastic": plastic_eq,
             "plastic_vec": plastic_vec,
             "plastic_tensor": plastic_tensor,
             "displacement": displacement,
@@ -83,9 +83,10 @@ class AlternatingSolver:
             raise RuntimeError("initialize_state must be called.")
         psi = self.state["psi"]
         crack = self.state["crack"]
-        plastic = self.state["plastic"]
+        plastic = self.state["plastic"]  # accumulated equivalent plastic strain
         plastic_vec = self.state["plastic_vec"]
-        plastic_tensor = self.state.get("plastic_tensor", np.zeros(psi.shape + (3, 3)))
+        plastic_tensor = self.state.get("plastic_tensor", np.zeros(psi.shape + (3, 3)))  # accumulated tensor
+        accum_plastic = self.state.get("accum_plastic", np.zeros_like(psi))
         displacement = self.state["displacement"]
         history = self.state["history"]
 
@@ -102,8 +103,13 @@ class AlternatingSolver:
             load_axis=self.config.load_axis,
             mech_weight=self.config.mech_plastic_weight,
         )
-        plastic = plastic + self.config.plastic_relax * (eps_eq - plastic)
-        plastic_vec = plastic_vec + self.config.plastic_relax * (eps_vec - plastic_vec)
+        plastic = np.clip(plastic + self.config.plastic_relax * eps_eq, 0.0, 1.0)
+        plastic_vec = np.clip(plastic_vec + self.config.plastic_relax * (eps_vec - plastic_vec), 0.0, 1.0)
+        plastic_tensor = plastic_tensor + self.config.plastic_relax * epsp_tensor
+        accum_plastic = accum_plastic + self.config.plastic_relax * eps_eq
+        # Re-evaluate displacement/strain/stress with updated plastic tensor (one inner iteration)
+        displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain, plastic_strain=plastic_tensor)
+        stress_vm = von_mises(stress)
 
         # 3. 裂纹更新 (使用 l0 修正量纲)
         pos_energy = self.energy.positive_strain_energy(strain, self.mechanical.stiffness)
@@ -138,7 +144,8 @@ class AlternatingSolver:
                 "crack": crack,
                 "plastic": plastic,
                 "plastic_vec": plastic_vec,
-                "plastic_tensor": epsp_tensor,
+                "plastic_tensor": plastic_tensor,
+                "accum_plastic": accum_plastic,
                 "displacement": displacement,
                 "history": history,
                 "stress": stress,
@@ -146,7 +153,7 @@ class AlternatingSolver:
             }
         )
         total_E = self.energy.total_energy(
-            strain, crack, psi, self.mechanical.stiffness, plastic, grain_mask=self.grain_mask
+            strain, crack, psi, self.mechanical.stiffness, accum_plastic, grain_mask=self.grain_mask, plastic_tensor=plastic_tensor
         )
         return total_E
 

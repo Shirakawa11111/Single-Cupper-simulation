@@ -65,7 +65,9 @@ class MechanicalEquilibriumSolver:
         macro_strain: Tuple[float, float, float],
         plastic_strain: Array | None = None,
     ) -> Tuple[Array, Array, Array]:
-        mask = (1.0 - crack)[..., None, None]
+        # Use quadratic degradation consistent with energy; use copper.residual_stiffness as k
+        k_res = self.material.residual_stiffness if hasattr(self.material, "residual_stiffness") else 1e-6
+        mask = ((1.0 - crack) ** 2 + k_res)[..., None, None]
         macro = np.zeros(crack.shape + (3, 3))
         for i in range(3):
             macro[..., i, i] = macro_strain[i]
