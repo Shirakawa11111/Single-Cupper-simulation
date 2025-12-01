@@ -115,8 +115,9 @@ class PFCCoupling:
         constraint: Constraint | None = None,
         yield_tau: float = 2e-4,
         flow_scale: float = 0.1,
-        visco_exponent: float = 5.0,
+        visco_exponent: float = 1.0,
         visco_ref: float | None = None,
+        linear_hardening: float = 0.05,
     ) -> None:
         self.pfc_params = pfc_params
         self.fracture = fracture
@@ -126,6 +127,7 @@ class PFCCoupling:
         self.flow_scale = flow_scale
         self.visco_exponent = visco_exponent
         self.visco_ref = visco_ref
+        self.linear_hardening = linear_hardening
         # Precompute valid FCC slip systems (n, m) with m·n=0
         normals = np.array(
             [
@@ -211,10 +213,16 @@ class PFCCoupling:
                 proj_signs.append(np.sign(proj))
             rss_stack = np.stack(rss_list, axis=0)
             rss_max = np.max(rss_stack, axis=0)
-            # Power-law viscoplasticity: absolute RSS relative to yield, no global normalization
-            ref = self.visco_ref if self.visco_ref is not None else self.yield_tau
-            overstress = np.clip(rss_max - self.yield_tau, 0.0, None)
-            flow_rate = (overstress / (ref + 1e-12)) ** self.visco_exponent
+            # Stable over-stress + linear isotropic hardening:
+            # raise yield with accumulated plastic_eq, and bound flow using a saturating overstress ratio
+            yield_eff = self.yield_tau
+            if plastic_eq is not None:
+                yield_eff = yield_eff + self.linear_hardening * np.clip(plastic_eq, 0.0, 1.0)
+            yield_eff = np.clip(yield_eff, self.yield_tau, None)
+            ref = self.visco_ref if self.visco_ref is not None else yield_eff
+            overstress = np.clip(rss_max - yield_eff, 0.0, None)
+            ratio = overstress / (ref + overstress + 1e-12)
+            flow_rate = (ratio) ** self.visco_exponent
             flow_scaled = flow_rate * self.flow_scale
             eps_eq_mech = np.clip(flow_scaled, 0.0, 1.0)
             # Directional: use the slip system achieving max RSS

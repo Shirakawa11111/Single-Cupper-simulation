@@ -66,12 +66,14 @@ class AlternatingSolver:
         stress = np.zeros(psi.shape + (3, 3))
         stress_vm = np.zeros_like(psi)
         plastic_tensor = np.zeros(psi.shape + (3, 3))  # accumulated plastic tensor (eigenstrain)
+        accum_plastic = plastic_eq.copy()  # track accumulated scalar for hardening/toughness
         self.state = {
             "psi": psi,
             "crack": crack,
             "plastic": plastic_eq,
             "plastic_vec": plastic_vec,
             "plastic_tensor": plastic_tensor,
+            "accum_plastic": accum_plastic,
             "displacement": displacement,
             "history": history,
             "stress": stress,

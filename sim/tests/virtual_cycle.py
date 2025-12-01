@@ -150,6 +150,7 @@ def run_virtual_cycles(
     for key, value in structure.fields.items():
         solver.state[key] = value.copy()
     solver.state["history"] = np.zeros_like(structure.fields["psi"])
+    solver.state["accum_plastic"] = solver.state.get("plastic", np.zeros_like(structure.fields["psi"])).copy()
 
     results: List[CycleResult] = []
     current_strain = 0.0
