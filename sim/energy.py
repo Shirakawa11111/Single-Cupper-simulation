@@ -113,8 +113,10 @@ class PFCCoupling:
         fracture: FractureParameters,
         mode: Literal["density", "plastic"] = "density",
         constraint: Constraint | None = None,
-        yield_tau: float = 0.02,
-        flow_scale: float = 50.0,
+        yield_tau: float = 2e-4,
+        flow_scale: float = 0.1,
+        visco_exponent: float = 5.0,
+        visco_ref: float | None = None,
     ) -> None:
         self.pfc_params = pfc_params
         self.fracture = fracture
@@ -122,6 +124,8 @@ class PFCCoupling:
         self.constraint = constraint or VolumeConstraint()
         self.yield_tau = yield_tau
         self.flow_scale = flow_scale
+        self.visco_exponent = visco_exponent
+        self.visco_ref = visco_ref
         # Precompute valid FCC slip systems (n, m) with m·n=0
         normals = np.array(
             [
@@ -207,11 +211,11 @@ class PFCCoupling:
                 proj_signs.append(np.sign(proj))
             rss_stack = np.stack(rss_list, axis=0)
             rss_max = np.max(rss_stack, axis=0)
-            max_rss_global = np.max(rss_max) + 1e-12
-            rss_norm = rss_max / max_rss_global
-            # yield-like cutoff: below yield_tau no plastic flow
-            flow = np.clip((rss_norm - self.yield_tau) / (1.0 - self.yield_tau), 0.0, 1.0)
-            flow_scaled = flow * self.flow_scale
+            # Power-law viscoplasticity: absolute RSS relative to yield, no global normalization
+            ref = self.visco_ref if self.visco_ref is not None else self.yield_tau
+            overstress = np.clip(rss_max - self.yield_tau, 0.0, None)
+            flow_rate = (overstress / (ref + 1e-12)) ** self.visco_exponent
+            flow_scaled = flow_rate * self.flow_scale
             eps_eq_mech = np.clip(flow_scaled, 0.0, 1.0)
             # Directional: use the slip system achieving max RSS
             idx_max = np.argmax(rss_stack, axis=0)

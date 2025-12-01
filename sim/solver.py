@@ -103,10 +103,12 @@ class AlternatingSolver:
             load_axis=self.config.load_axis,
             mech_weight=self.config.mech_plastic_weight,
         )
-        plastic = np.clip(plastic + self.config.plastic_relax * eps_eq, 0.0, 1.0)
+        epsp_increment = self.config.plastic_relax * epsp_tensor
+        plastic_tensor = plastic_tensor + epsp_increment
+        eq_inc = np.sqrt((2.0 / 3.0) * np.sum(epsp_increment * epsp_increment, axis=(-2, -1)))
+        plastic = np.clip(plastic + eq_inc, 0.0, 1.0)
         plastic_vec = np.clip(plastic_vec + self.config.plastic_relax * (eps_vec - plastic_vec), 0.0, 1.0)
-        plastic_tensor = plastic_tensor + self.config.plastic_relax * epsp_tensor
-        accum_plastic = accum_plastic + self.config.plastic_relax * eps_eq
+        accum_plastic = accum_plastic + eq_inc
         # Re-evaluate displacement/strain/stress with updated plastic tensor (one inner iteration)
         displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain, plastic_strain=plastic_tensor)
         stress_vm = von_mises(stress)

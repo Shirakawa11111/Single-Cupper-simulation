@@ -36,7 +36,7 @@ class CycleResult:
 
 def run_virtual_cycles(
     cycles: int = 3,               # 建议调试时先跑 1-2 个周期
-    max_strain: float = 0.08,      # 拉伸峰值
+    max_strain: float = 0.02,      # 拉伸峰值（低应力/屈服平台场景）
     min_strain: float | None = None,  # 若为 None，使用对称 -max_strain
     segment_steps: int = 50,       # 每个子段（0->峰值）步数
     failure_threshold: float = 0.98,  # 平均裂纹达到此值提前终止
@@ -55,7 +55,7 @@ def run_virtual_cycles(
     dir_coupling: float = 1.0,          # 方向性增益
     plastic_relax: float = 0.2,         # 塑性松弛
     poisson_ratio: float = 0.34,        # 泊松比，用于宏观应变的侧向收缩
-    toughness_scale: float = 1.0,       # 韧性缩放因子 (<1 降低 Gc 促开裂；>1 提高韧性)
+    toughness_scale: float = 0.1,       # 韧性缩放因子 (<1 降低 Gc 促开裂；>1 提高韧性)
     stress_strain_csv: Path | None = None,  # 可选：逐步输出宏观应力-应变曲线
 ) -> Tuple[List[CycleResult], float, float]:
     
@@ -279,11 +279,12 @@ if __name__ == "__main__":
         dump_dir=Path("sim/tests/virtual_cycle_lammpstrj"),
         vtk_dir=Path("sim/tests/virtual_cycle_vtk"),
         cycles=1,
-        max_strain=0.08,
+        max_strain=0.02,
         segment_steps=100,
         defect_config=None,
         initial_vtk=Path("sim/tests/virtual_cycle_vtk/initial_seeded.vtk"),
         pre_relax_steps=0,
         pre_relax_strain=0.0,
         stress_strain_csv=Path("sim/tests/virtual_cycle_stress_strain.csv"),
+        toughness_scale=0.1,
     )
