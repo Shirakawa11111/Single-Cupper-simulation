@@ -55,3 +55,5 @@ python -m sim.tests.virtual_cycle \
 - 冒烟演化脚本 `sim/tests/smoke_seeded.py`：初始化播种缺陷后跑少量步长，逐步输出 VTK 序列（含变形坐标）和末步 LAMMPS，便于 ParaView 时间序列查看。
 - 变形坐标：VTK 支持 `deform_coordinates=True`，将宏观应变+微观位移写入坐标；也会输出未变形版本便于对比。
 - 疲劳主脚本 `sim/tests/virtual_cycle.py` 增强：支持缺陷播种输入、缺口种子（notch_box）、预演化步（pre_relax）让缺陷/滑移带先成形；宏观应变包含泊松收缩 (ε, -ν ε, -ν ε)；可选应力耦合到 PFC (`stress_mu_weight`)；韧性缩放 `toughness_scale` 便于促开裂/稳健性调参；逐步 VTK/LAMMPS 输出使用一致的宏观应变。
+- 塑性/力学更新：`plastic_measures` 采用 FCC 正交滑移系 RSS（含符号）和屈服阈值/流动尺度，累积等效塑性（用于韧性退化）与塑性张量（本征应变）。力学求解与能量使用 $(\varepsilon - \varepsilon^p)$；支持晶界弱化 mask。输出可选应力–应变曲线 CSV（`stress_strain_csv`）。
+- 输出宏观应力应变：`virtual_cycle.py` 可选写出逐步的平均应力-应变曲线（含 von Mises）到 CSV（`stress_strain_csv`），便于快速绘制。

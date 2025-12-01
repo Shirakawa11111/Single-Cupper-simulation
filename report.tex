@@ -30,11 +30,15 @@ G_c = G_{c0} \left(0.5 - g_{\text{res}} \tanh \left[ 2 \left(\frac{\varepsilon_{
 which lowers $G_c$ with accumulated plastic strain. Parameters: $G_{c0}$ initial toughness, $\ell_0$ regularization length, $g_{\text{res}}$ residual toughness ratio, and $\varepsilon_{1/2}$ the equivalent plastic strain at half-toughness. The equivalent plastic strain $\varepsilon_{\text{eq}}$ is derived from the PFC density gradients or an explicit plastic field, matching the code path in \texttt{PFCCoupling}.
 Crack driving compares tensile elastic energy density with the critical fracture energy density $G_c/\ell_0$, so the numerical driving term uses $H \ell_0 /(G_c + \epsilon)$; this reintroduces the characteristic length to maintain a dimensionless ratio and avoid blow-up.
 
-\paragraph{Plastic surrogates and anisotropic driving} Mechanical and PFC contributions are blended:
+\paragraph{Plastic surrogates and anisotropic driving} Mechanical and PFC contributions are blended, with mechanical part driven by FCC slip RSS (orthogonal \{111\}$\langle 110\rangle$, sign-preserving, with yield threshold):
 \begin{align}
-\hat{\varepsilon}_{\text{vm}} &= \frac{\sqrt{1.5\,\mathrm{dev}(\varepsilon):\mathrm{dev}(\varepsilon)}}{\max|\cdot|}, \qquad
+\hat{\tau}_{\text{RSS}} &= \max_{m,n\in \{111\}\langle 110\rangle} |m\cdot(\varepsilon n)|, \qquad
 \hat{g} = \frac{\sqrt{\sum_i (\partial_i \psi)^2}}{\max|\cdot|}, \\
-\varepsilon_{\text{eq}} &= w_{\text{mech}}\,\hat{\varepsilon}_{\text{vm}} + (1-w_{\text{mech}})\,\hat{g},\\
+\varepsilon_{\text{eq}} &= w_{\text{mech}}\,\frac{\hat{\tau}_{\text{RSS}}}{\max \hat{\tau}_{\text{RSS}}} + (1-w_{\text{mech}})\,\hat{g},\\
+\varepsilon^p_{\text{flow}} &= \mathrm{flow}(\hat{\tau}_{\text{RSS}}-\tau_y)\,\mathrm{sign}(m\cdot\varepsilon n)\,\mathrm{sym}(m\otimes n),\\
+\varepsilon_{\text{eq}}^{\text{acc}} &\leftarrow \varepsilon_{\text{eq}}^{\text{acc}} + \Delta t\,\gamma\,\varepsilon_{\text{eq}}, \qquad
+\varepsilon^p \leftarrow \varepsilon^p + \Delta t\,\gamma\,\varepsilon^p_{\text{flow}},\\
+\mathrm{flow}(x) &= \max\!\left(0, \frac{x}{1-\tau_y}\right)\, s_{\text{flow}},\\
 \varepsilon_{\text{dir},i} &= w_{\text{mech}}\,[\varepsilon_{ii}]_+ + (1-w_{\text{mech}})\,\frac{|\partial_i \psi|}{\max_j |\partial_j \psi|},
 \end{align}
 where $w_{\text{mech}}\in[0,1]$ (default 0.9) and $[\cdot]_+$ clamps to tension. The loading-axis component $\varepsilon_{\text{dir},L}$ boosts both the history and crack driving:
@@ -42,11 +46,11 @@ where $w_{\text{mech}}\in[0,1]$ (default 0.9) and $[\cdot]_+$ clamps to tension.
 H \leftarrow \max\!\big(H,\; f_{\text{elas}}^{+}(1+k_{\text{dir}}\varepsilon_{\text{dir},L})\big), \qquad
 \mathcal{D} = \frac{H\,\ell_0}{G_c+\epsilon}(1-\phi)(1+k_{\text{dir}}\varepsilon_{\text{dir},L}),
 \end{equation}
-with $k_{\text{dir}}$ (default 0.8) tuning anisotropy. When stress coupling is enabled, the chemical potential gets an additive term
+with $k_{\text{dir}}$ tuning anisotropy. When stress coupling is enabled, the chemical potential gets an additive term
 \begin{equation}
 \mu_{\text{extra}} = \alpha \frac{\sigma_{\text{vm}}}{\max |\sigma_{\text{vm}}|},
 \end{equation}
-so high von Mises regions accelerate PFC evolution.
+so high von Mises regions accelerate PFC evolution. In mechanics, the accumulated plastic tensor $\varepsilon^p$ enters as an eigenstrain, so the stress is $C:(\varepsilon-\varepsilon^p)$; the accumulated scalar $\varepsilon_{\text{eq}}^{\text{acc}}$ degrades toughness $G_c(\varepsilon_{\text{eq}}^{\text{acc}})$ (optionally weakened on grain boundaries).
 
 The PFC energy follows
 \begin{equation}
@@ -82,7 +86,7 @@ Here $H$ stores the maximum tensile elastic energy density seen so far, $\epsilo
     \item \textbf{Alternating solver}: The cyclic load path is triangular $0\rightarrow +\varepsilon_{\max}\rightarrow 0 \rightarrow -\varepsilon_{\max}\rightarrow 0$, each segment subdivided into $N_{\text{seg}}$ steps. At every increment: solve mechanical equilibrium (CG); blend mechanical/PFC plastic surrogates and relax plastic scalar + directional vector; update crack with anisotropic boost; advance PFC with optional stress-coupled $\mu_{\text{extra}}$.
     \item \textbf{Macro strain with Poisson contraction}: Applied strain is $(\varepsilon, -\nu \varepsilon, -\nu \varepsilon)$ (default $\nu=0.34$ for Cu); the same macro strain is used in PFC $k$-update, VTK warp, and LAMMPS dump.
     \item \textbf{Toughness scaling}: A scalar $s_{\mathrm{Gc}}$ rescales $g_c$ and $g_{\mathrm{res}}$ (e.g., $s<1$ to promote cracking), leaving $\ell_0,k,\epsilon_{1/2}$ unchanged.
-    \item \textbf{Outputs}: Every few steps dump VTK frames (deformed coordinates) and after each cycle dump LAMMPS and optional `.data` snapshots. Scalar/vector fields include crack, plastic (scalar + directional), $\psi$, stress (tensor and von Mises), displacement, and masks (defect/line/notch). CSV logs store per-cycle energy, mean crack/plastic, crack increment, and plastic range; runs stop early if $\langle\phi\rangle$ exceeds a failure threshold.
+    \item \textbf{Outputs}: Every few steps dump VTK frames (deformed coordinates) and after each cycle dump LAMMPS and optional `.data` snapshots. Scalar/vector fields include crack, plastic (scalar + directional), $\psi$, stress (tensor and von Mises), displacement, and masks (defect/line/notch). CSV logs store per-cycle energy, mean crack/plastic, crack increment, plastic range, and (optionally) a stepwise macro stress--strain curve $\{\varepsilon, \bar{\sigma}_{xx}, \bar{\sigma}_{yy}, \bar{\sigma}_{zz}, \bar{\sigma}_{\mathrm{vm}}\}$; runs stop early if $\langle\phi\rangle$ exceeds a failure threshold.
     \item \textbf{Fatigue metrics}: Fit crack increment per cycle vs cycle count (Paris-like slope) and plastic strain range vs $2N$ (Coffin--Manson slope) from the logged series.
 \end{enumerate}
 
