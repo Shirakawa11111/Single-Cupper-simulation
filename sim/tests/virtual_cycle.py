@@ -26,6 +26,11 @@ from ..solver import AlternatingSolver, SolverConfig
 from ..structure import Cu111StructureBuilder
 
 
+def nondim_stress_to_gpa(stress_nd: np.ndarray, c11_GPa: float = 168.4) -> np.ndarray:
+    """Convert nondimensional stress (σ* = σ/168.4 GPa) back to GPa."""
+    return stress_nd * c11_GPa
+
+
 @dataclass
 class CycleResult:
     cycle: int
@@ -39,6 +44,7 @@ def run_virtual_cycles(
     max_strain: float = 0.02,      # 拉伸峰值（低应力/屈服平台场景）
     min_strain: float | None = None,  # 若为 None，使用对称 -max_strain
     segment_steps: int = 50,       # 每个子段（0->峰值）步数
+    monotonic: bool = False,       # 若为 True，仅做 0->+max_strain 单调拉伸，便于 σ–ε 标定
     failure_threshold: float = 0.98,  # 平均裂纹达到此值提前终止
     csv_output: Path | None = None,
     data_output: Path | None = None,
@@ -53,14 +59,14 @@ def run_virtual_cycles(
     stress_mu_weight: float = 0.5,      # von Mises 应力归一化后乘此系数作为 μ_extra，<=0 则关闭
     crack_relax: float = 0.05,          # 裂纹松弛系数（默认较高便于萌生）
     dir_coupling: float = 1.0,          # 方向性增益
-    plastic_relax: float = 0.2,         # 塑性松弛
+    plastic_relax: float = 0.075,       # 塑性松弛；与 PFCCoupling.flow_scale 共同控制屈服后软化速度
     poisson_ratio: float = 0.34,        # 泊松比，用于宏观应变的侧向收缩
     toughness_scale: float = 0.1,       # 韧性缩放因子 (<1 降低 Gc 促开裂；>1 提高韧性)
     stress_strain_csv: Path | None = None,  # 可选：逐步输出宏观应力-应变曲线
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 初始化
-    # 【关键】无量纲设置：Spacing=1.0，材料/断裂参数在 energy.py 中已归一化
+    # 【关键】无量纲设置：Spacing=1.0，stress* = stress_phys / 168.4 GPa (Cu c11)
     grid = GridSpec(shape=(128, 64, 16), spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
     
     copper = CopperParameters()
@@ -159,7 +165,7 @@ def run_virtual_cycles(
 
     # 2. 循环加载
     min_strain = -max_strain if min_strain is None else min_strain
-    load_segments = [max_strain, 0.0, min_strain, 0.0]  # triangle: 0->+max->0->-max->0
+    load_segments = [max_strain] if monotonic else [max_strain, 0.0, min_strain, 0.0]  # monotonic or triangle
 
     for cycle in range(1, cycles + 1):
         print(f"=== Starting Cycle {cycle} ===")
@@ -262,15 +268,42 @@ def run_virtual_cycles(
         if stress_strain_csv and stress_strain_log:
             stress_strain_csv.parent.mkdir(parents=True, exist_ok=True)
             with stress_strain_csv.open("w", encoding="utf-8") as fh:
-                fh.write("macro_strain,sig_xx,sig_yy,sig_zz,sig_vm\n")
+                fh.write("macro_strain,sig_xx_nd,sig_yy_nd,sig_zz_nd,sig_vm_nd,sig_xx_GPa,sig_yy_GPa,sig_zz_GPa,sig_vm_GPa\n")
                 for row in stress_strain_log:
-                    fh.write(",".join(f"{v:.6e}" for v in row) + "\n")
+                    sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd = row[1], row[2], row[3], row[4]
+                    sig_xx_gpa, sig_yy_gpa, sig_zz_gpa, sig_vm_gpa = nondim_stress_to_gpa(
+                        np.array([sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd])
+                    )
+                    fh.write(
+                        f"{row[0]:.6e},"
+                        f"{sig_xx_nd:.6e},{sig_yy_nd:.6e},{sig_zz_nd:.6e},{sig_vm_nd:.6e},"
+                        f"{sig_xx_gpa:.6e},{sig_yy_gpa:.6e},{sig_zz_gpa:.6e},{sig_vm_gpa:.6e}\n"
+                    )
 
     if data_output:
         data_output.parent.mkdir(parents=True, exist_ok=True)
         write_atomic_data(data_output, grid)
 
     return results, paris_coeff, coffman
+
+
+def run_monotonic_tension(
+    max_strain: float = 0.01,
+    segment_steps: int = 100,
+    **kwargs,
+):
+    """
+    Convenience wrapper for a single-pass 0->+max_strain monotonic tension test.
+    Useful for σ–ε calibration against experimental [111] Cu curves.
+    """
+    return run_virtual_cycles(
+        cycles=1,
+        max_strain=max_strain,
+        min_strain=0.0,
+        segment_steps=segment_steps,
+        monotonic=True,
+        **kwargs,
+    )
 
 
 if __name__ == "__main__":

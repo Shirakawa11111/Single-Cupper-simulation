@@ -49,16 +49,18 @@ class FractureParameters:
 class CopperParameters:
     """
     Cubic elastic constants and plasticity inputs for copper
-    in **non-dimensional form**. Stiffness values are normalized by c11
-    (physical ~168.4 GPa), so c11 = 1.0, c12 ≈ 0.72, c44 ≈ 0.45.
+    in **non-dimensional form**. Stiffness values are normalized by
+    the reference c11 (physical c11 = 168.4 GPa), so all stresses
+    are σ* = σ_phys / 168.4 GPa. Physical values: c11=168.4 GPa,
+    c12=121.4 GPa, c44=75.4 GPa (E_[111]≈191 GPa, ~3×E_[100]).
     Plastic parameters are scaled by the same stress unit.
     """
 
     c11: float = 1.0
-    c12: float = 0.72
-    c44: float = 0.45
-    slip_resistance: float = 1.188e-3  # 200 MPa / 168.4 GPa
-    hardening_modulus: float = 5.94e-5  # 10 MPa / 168.4 GPa
+    c12: float = 0.7209  # 121.4 / 168.4
+    c44: float = 0.4477  # 75.4 / 168.4
+    slip_resistance: float = 1.07e-3  # 180 MPa / 168.4 GPa
+    hardening_modulus: float = 6.0e-5  # ~10 MPa / 168.4 GPa
     hardening_b: float = 8.0
     residual_stiffness: float = 1e-6  # crack residual stiffness
 
@@ -113,11 +115,14 @@ class PFCCoupling:
         fracture: FractureParameters,
         mode: Literal["density", "plastic"] = "density",
         constraint: Constraint | None = None,
-        yield_tau: float = 2e-4,
-        flow_scale: float = 0.1,
-        visco_exponent: float = 1.0,
+        # yield stress scaled by c11_ref=168.4 GPa; 180 MPa -> ~1.07e-3
+        yield_tau: float = 1.07e-3,
+        # flow scaling (nd): smaller slows post-yield softening; tune vs σ–ε
+        flow_scale: float = 5e-4,
+        visco_exponent: float = 10.0,  # nonlinear viscoplasticity (stable overstress)
         visco_ref: float | None = None,
-        linear_hardening: float = 0.05,
+        # isotropic hardening slope (nd): ~10 MPa / 168.4 GPa ≈ 6e-5
+        linear_hardening: float = 6.0e-5,
     ) -> None:
         self.pfc_params = pfc_params
         self.fracture = fracture
@@ -168,6 +173,8 @@ class PFCCoupling:
         plastic_eq: Array | None,
         plastic_vec: Array | None = None,
         strain: Array | None = None,
+        stress: Array | None = None,
+        backstress: Array | None = None,
         load_axis: int = 0,
         mech_weight: float = 0.7,
     ) -> tuple[Array, Array, Array]:
@@ -201,14 +208,20 @@ class PFCCoupling:
 
         if strain is not None:
             # resolved shear stress proxy: use strain as proxy (small-strain)
-            # For each slip system, compute RSS = m · (strain · n)
+            # Prefer stress if provided; else use strain. For each slip system,
+            # compute RSS = m · ((stress-backstress) · n) or m · (strain · n).
             rss_list = []
             mn_list = []
             proj_signs = []
+            tensor = None
+            if stress is not None:
+                tensor = stress if backstress is None else stress - backstress
+            elif strain is not None:
+                tensor = strain
             for m, n in self.slip_systems:
                 mn = np.outer(m, n)
                 mn_list.append(mn)
-                proj = np.einsum("...ij,ij->...", strain, mn, optimize=True)
+                proj = np.einsum("...ij,ij->...", tensor, mn, optimize=True)
                 rss_list.append(np.abs(proj))
                 proj_signs.append(np.sign(proj))
             rss_stack = np.stack(rss_list, axis=0)
