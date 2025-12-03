@@ -37,6 +37,8 @@ class CycleResult:
     load: float
     crack_mean: float
     plastic_mean: float
+    plastic_range: float = 0.0
+    rss_peak_nd: float = 0.0
 
 
 def run_virtual_cycles(
@@ -172,6 +174,7 @@ def run_virtual_cycles(
         energy_val = 0.0
         plastic_min, plastic_max = np.inf, -np.inf
         crack_prev = results[-1].crack_mean if results else 0.0
+        cycle_rss_peak = -np.inf
         
         for target in load_segments:
             target_start = current_strain
@@ -187,6 +190,9 @@ def run_virtual_cycles(
                 stress_tensor = solver.state["stress"]
                 stress_mean = np.mean(stress_tensor, axis=(0, 1, 2))
                 stress_vm_mean = float(np.mean(solver.state.get("stress_vm", 0.0)))
+                # RSS peak tracking (nd) per cycle
+                rss_max, _, _, _ = coupling.compute_rss(stress_tensor, backstress=solver.state.get("backstress"))
+                cycle_rss_peak = max(cycle_rss_peak, float(np.mean(rss_max)))
                 stress_strain_log.append(
                     (
                         current_strain,
@@ -222,7 +228,7 @@ def run_virtual_cycles(
         plastic_mean = solver.state["plastic"].mean()
         plastic_range = max(plastic_max - plastic_min, 0.0)
         crack_delta = max(crack_mean - crack_prev, 0.0)
-        results.append(CycleResult(cycle, energy_val, crack_mean, plastic_mean))
+        results.append(CycleResult(cycle, energy_val, crack_mean, plastic_mean, plastic_range=plastic_range, rss_peak_nd=cycle_rss_peak))
 
         if dump_dir:
             dump_dir.mkdir(parents=True, exist_ok=True)
@@ -245,11 +251,7 @@ def run_virtual_cycles(
     for i, r in enumerate(results):
         prev_crack = results[i - 1].crack_mean if i > 0 else r.crack_mean
         crack_deltas.append(max(r.crack_mean - prev_crack, 1e-9))
-        # Plastic range per cycle was tracked above; reconstruct crude surrogate
-        if i == 0:
-            plastic_ranges.append(max(2 * r.plastic_mean, 1e-9))
-        else:
-            plastic_ranges.append(max(abs(r.plastic_mean - results[i - 1].plastic_mean), 1e-9))
+        plastic_ranges.append(max(r.plastic_range, 1e-9))
 
     cycles_arr = np.arange(1, len(results) + 1, dtype=float)
     paris_coeff = 0.0
@@ -316,6 +318,39 @@ def run_monotonic_tension(
         monotonic=True,
         **kwargs,
     )
+
+
+def run_amplitude_sweep(
+    amplitudes: list[float] | tuple[float, ...] = (2e-4, 5e-4, 1e-3),
+    cycles: int = 80,
+    steady_window: int = 10,
+    **kwargs,
+) -> list[tuple[float, float, float]]:
+    """
+    Sweep over strain amplitudes, run to (approximate) steady cyclic response,
+    and return tuples (eps_amp, plastic_range_nd, rss_peak_MPa) averaged over the
+    last `steady_window` cycles.
+    """
+    results_summary = []
+    for amp in amplitudes:
+        res, _, _ = run_virtual_cycles(
+            cycles=cycles,
+            max_strain=amp,
+            segment_steps=kwargs.get("segment_steps", 50),
+            monotonic=False,
+            **kwargs,
+        )
+        if not res:
+            continue
+        take = res[-steady_window:] if len(res) >= steady_window else res
+        plast_ranges = [r.plastic_range for r in take]
+        rss_peaks_nd = [r.rss_peak_nd for r in take]
+        # convert rss_peak to MPa using 168.4 GPa scale
+        rss_peaks_mpa = [r * 168.4e3 for r in rss_peaks_nd]
+        plast_mean = float(np.mean(plast_ranges))
+        rss_mean_mpa = float(np.mean(rss_peaks_mpa))
+        results_summary.append((amp, plast_mean, rss_mean_mpa))
+    return results_summary
 
 
 if __name__ == "__main__":

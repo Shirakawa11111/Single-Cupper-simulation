@@ -18,8 +18,8 @@ from .pfc import PFCEvolver
 class SolverConfig:
     dt: float = 1e-2
     # Plastic relaxation per step (nd). Combine with PFCCoupling.flow_scale to match σ–ε softening rate.
-    plastic_relax: float = 0.18
-    crack_relax: float = 0.05  # 稍微调大，让裂纹在有驱动力时能生长
+    plastic_relax: float = 0.10
+    crack_relax: float = 0.0  # 可选：关闭裂纹以单看循环塑性
     # 加载方向（用于方向性塑性耦合），默认沿 x 轴
     load_axis: int = 0
     # 方向性耦合强度：>0 时，加载方向上的塑性分量会增强裂纹驱动力

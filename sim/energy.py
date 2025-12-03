@@ -59,8 +59,8 @@ class CopperParameters:
     c11: float = 1.0
     c12: float = 0.7209  # 121.4 / 168.4
     c44: float = 0.4477  # 75.4 / 168.4
-    slip_resistance: float = 1.07e-3  # 180 MPa / 168.4 GPa
-    hardening_modulus: float = 6.0e-5  # ~10 MPa / 168.4 GPa
+    slip_resistance: float = 1.3e-4  # ~22 MPa / 168.4 GPa
+    hardening_modulus: float = 1.0e-4  # very weak; main hardening via back-stress
     hardening_b: float = 8.0
     residual_stiffness: float = 1e-6  # crack residual stiffness
 
@@ -115,17 +115,17 @@ class PFCCoupling:
         fracture: FractureParameters,
         mode: Literal["density", "plastic"] = "density",
         constraint: Constraint | None = None,
-        # yield stress scaled by c11_ref=168.4 GPa; 180 MPa -> ~1.07e-3. Slightly lower to ease yielding.
-        yield_tau: float = 6e-4,
+        # yield stress scaled by c11_ref=168.4 GPa; here ~22 MPa -> ~1.3e-4
+        yield_tau: float = 1.3e-4,
         # flow scaling (nd): tune with plastic_relax to match σ–ε softening rate
-        flow_scale: float = 2e-3,
-        visco_exponent: float = 2.0,  # softer transition
-        visco_ref: float | None = None,
-        # isotropic hardening slope (nd): ~10 MPa / 168.4 GPa; reduced to keep Bauschinger visible
-        linear_hardening: float = 3.0e-5,
+        flow_scale: float = 5.0e-4,
+        visco_exponent: float = 3.0,  # softer transition
+        visco_ref: float | None = 2.0e-4,
+        # very weak isotropic hardening; main hardening via back-stress
+        linear_hardening: float = 1.0e-4,
         # kinematic back-stress coefficients (Prager/Armstrong-Frederick style)
-        kin_c: float = 1.5e-3,
-        kin_d: float = 0.8,
+        kin_c: float = 2.0e-4,
+        kin_d: float = 1.5,
     ) -> None:
         self.pfc_params = pfc_params
         self.fracture = fracture
@@ -166,6 +166,40 @@ class PFCCoupling:
             for m in dirs:
                 if np.abs(np.dot(m, n)) < 1e-6:  # ensure orthogonality
                     self.slip_systems.append((m, n))
+
+    def compute_rss(
+        self,
+        tensor: Array,
+        backstress: Array | None = None,
+        dev_only: bool = True,
+    ) -> tuple[Array, Array, list[Array], list[Array]]:
+        """
+        Compute resolved shear stress (RSS) on FCC slip systems from a stress-like tensor.
+
+        Returns (rss_max, rss_stack, proj_signs, mn_list)
+          rss_max: max RSS per point
+          rss_stack: RSS magnitude per slip system
+          proj_signs: sign of projection per slip system
+          mn_list: slip dyads for reuse
+        """
+        tensor_eff = tensor if backstress is None else tensor - backstress
+        # enforce symmetry and (optionally) deviatoric part
+        tensor_eff = 0.5 * (tensor_eff + np.swapaxes(tensor_eff, -1, -2))
+        if dev_only:
+            tr = np.trace(tensor_eff, axis1=-2, axis2=-1)[..., None, None] / 3.0
+            tensor_eff = tensor_eff - tr * np.eye(3)
+        rss_list: list[Array] = []
+        mn_list: list[Array] = []
+        proj_signs: list[Array] = []
+        for m, n in self.slip_systems:
+            mn = np.outer(m, n)
+            mn_list.append(mn)
+            proj = np.einsum("...ij,ij->...", tensor_eff, mn, optimize=True)
+            rss_list.append(np.abs(proj))
+            proj_signs.append(np.sign(proj))
+        rss_stack = np.stack(rss_list, axis=0)
+        rss_max = np.max(rss_stack, axis=0)
+        return rss_max, rss_stack, proj_signs, mn_list
 
     def initialize_density(self, shape: Tuple[int, ...], seed: int = 0) -> Array:
         rng = np.random.default_rng(seed)
@@ -212,29 +246,23 @@ class PFCCoupling:
         epsp_tensor = np.zeros(psi.shape + (3, 3))
 
         if strain is not None:
-            # resolved shear stress proxy: use strain as proxy (small-strain)
-            # Prefer stress if provided; else use strain. For each slip system,
-            # compute RSS = m · ((stress-backstress) · n) or m · (strain · n).
-            rss_list = []
-            mn_list = []
-            proj_signs = []
-            tensor = None
+            # Prefer stress if provided; else use strain. RSS uses deviatoric effective tensor.
             if stress is not None:
-                tensor = stress if backstress is None else stress - backstress
-                # use deviatoric effective stress for yielding and symmetric part to avoid drift
-                tensor = 0.5 * (tensor + np.swapaxes(tensor, -1, -2))
-                tr = np.trace(tensor, axis1=-2, axis2=-1)[..., None, None] / 3.0
-                tensor = tensor - tr * np.eye(3)
-            elif strain is not None:
+                rss_max, rss_stack, proj_signs, mn_list = self.compute_rss(stress, backstress=backstress, dev_only=True)
+            else:
+                # strain proxy (no deviatoric reduction)
+                rss_list = []
+                mn_list = []
+                proj_signs = []
                 tensor = strain
-            for m, n in self.slip_systems:
-                mn = np.outer(m, n)
-                mn_list.append(mn)
-                proj = np.einsum("...ij,ij->...", tensor, mn, optimize=True)
-                rss_list.append(np.abs(proj))
-                proj_signs.append(np.sign(proj))
-            rss_stack = np.stack(rss_list, axis=0)
-            rss_max = np.max(rss_stack, axis=0)
+                for m, n in self.slip_systems:
+                    mn = np.outer(m, n)
+                    mn_list.append(mn)
+                    proj = np.einsum("...ij,ij->...", tensor, mn, optimize=True)
+                    rss_list.append(np.abs(proj))
+                    proj_signs.append(np.sign(proj))
+                rss_stack = np.stack(rss_list, axis=0)
+                rss_max = np.max(rss_stack, axis=0)
             # Stable over-stress + linear isotropic hardening:
             # raise yield with accumulated plastic_eq, and bound flow using a saturating overstress ratio
             yield_eff = self.yield_tau
