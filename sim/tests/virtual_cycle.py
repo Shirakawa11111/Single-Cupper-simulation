@@ -188,7 +188,14 @@ def run_virtual_cycles(
                 stress_mean = np.mean(stress_tensor, axis=(0, 1, 2))
                 stress_vm_mean = float(np.mean(solver.state.get("stress_vm", 0.0)))
                 stress_strain_log.append(
-                    (current_strain, stress_mean[0, 0], stress_mean[1, 1], stress_mean[2, 2], stress_vm_mean)
+                    (
+                        current_strain,
+                        stress_mean[0, 0],
+                        stress_mean[1, 1],
+                        stress_mean[2, 2],
+                        stress_vm_mean,
+                        plast_mean,
+                    )
                 )
 
                 if step % 5 == 0:
@@ -268,14 +275,19 @@ def run_virtual_cycles(
         if stress_strain_csv and stress_strain_log:
             stress_strain_csv.parent.mkdir(parents=True, exist_ok=True)
             with stress_strain_csv.open("w", encoding="utf-8") as fh:
-                fh.write("macro_strain,sig_xx_nd,sig_yy_nd,sig_zz_nd,sig_vm_nd,sig_xx_GPa,sig_yy_GPa,sig_zz_GPa,sig_vm_GPa\n")
+                fh.write(
+                    "macro_strain,plastic_mean,"
+                    "sig_xx_nd,sig_yy_nd,sig_zz_nd,sig_vm_nd,"
+                    "sig_xx_GPa,sig_yy_GPa,sig_zz_GPa,sig_vm_GPa\n"
+                )
                 for row in stress_strain_log:
+                    plastic_mean = row[5]
                     sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd = row[1], row[2], row[3], row[4]
                     sig_xx_gpa, sig_yy_gpa, sig_zz_gpa, sig_vm_gpa = nondim_stress_to_gpa(
                         np.array([sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd])
                     )
                     fh.write(
-                        f"{row[0]:.6e},"
+                        f"{row[0]:.6e},{plastic_mean:.6e},"
                         f"{sig_xx_nd:.6e},{sig_yy_nd:.6e},{sig_zz_nd:.6e},{sig_vm_nd:.6e},"
                         f"{sig_xx_gpa:.6e},{sig_yy_gpa:.6e},{sig_zz_gpa:.6e},{sig_vm_gpa:.6e}\n"
                     )

@@ -115,14 +115,17 @@ class PFCCoupling:
         fracture: FractureParameters,
         mode: Literal["density", "plastic"] = "density",
         constraint: Constraint | None = None,
-        # yield stress scaled by c11_ref=168.4 GPa; 180 MPa -> ~1.07e-3
-        yield_tau: float = 1.07e-3,
-        # flow scaling (nd): smaller slows post-yield softening; tune vs σ–ε
-        flow_scale: float = 5e-4,
-        visco_exponent: float = 10.0,  # nonlinear viscoplasticity (stable overstress)
+        # yield stress scaled by c11_ref=168.4 GPa; 180 MPa -> ~1.07e-3. Slightly lower to ease yielding.
+        yield_tau: float = 6e-4,
+        # flow scaling (nd): tune with plastic_relax to match σ–ε softening rate
+        flow_scale: float = 2e-3,
+        visco_exponent: float = 2.0,  # softer transition
         visco_ref: float | None = None,
-        # isotropic hardening slope (nd): ~10 MPa / 168.4 GPa ≈ 6e-5
-        linear_hardening: float = 6.0e-5,
+        # isotropic hardening slope (nd): ~10 MPa / 168.4 GPa; reduced to keep Bauschinger visible
+        linear_hardening: float = 3.0e-5,
+        # kinematic back-stress coefficients (Prager/Armstrong-Frederick style)
+        kin_c: float = 1.5e-3,
+        kin_d: float = 0.8,
     ) -> None:
         self.pfc_params = pfc_params
         self.fracture = fracture
@@ -133,6 +136,8 @@ class PFCCoupling:
         self.visco_exponent = visco_exponent
         self.visco_ref = visco_ref
         self.linear_hardening = linear_hardening
+        self.kin_c = kin_c
+        self.kin_d = kin_d
         # Precompute valid FCC slip systems (n, m) with m·n=0
         normals = np.array(
             [
@@ -216,6 +221,10 @@ class PFCCoupling:
             tensor = None
             if stress is not None:
                 tensor = stress if backstress is None else stress - backstress
+                # use deviatoric effective stress for yielding and symmetric part to avoid drift
+                tensor = 0.5 * (tensor + np.swapaxes(tensor, -1, -2))
+                tr = np.trace(tensor, axis1=-2, axis2=-1)[..., None, None] / 3.0
+                tensor = tensor - tr * np.eye(3)
             elif strain is not None:
                 tensor = strain
             for m, n in self.slip_systems:

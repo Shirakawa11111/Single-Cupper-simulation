@@ -18,7 +18,7 @@ from .pfc import PFCEvolver
 class SolverConfig:
     dt: float = 1e-2
     # Plastic relaxation per step (nd). Combine with PFCCoupling.flow_scale to match σ–ε softening rate.
-    plastic_relax: float = 0.075
+    plastic_relax: float = 0.18
     crack_relax: float = 0.05  # 稍微调大，让裂纹在有驱动力时能生长
     # 加载方向（用于方向性塑性耦合），默认沿 x 轴
     load_axis: int = 0
@@ -68,6 +68,7 @@ class AlternatingSolver:
         stress_vm = np.zeros_like(psi)
         plastic_tensor = np.zeros(psi.shape + (3, 3))  # accumulated plastic tensor (eigenstrain)
         accum_plastic = plastic_eq.copy()  # track accumulated scalar for hardening/toughness
+        backstress = np.zeros_like(stress)  # kinematic hardening back-stress tensor
         self.state = {
             "psi": psi,
             "crack": crack,
@@ -75,6 +76,7 @@ class AlternatingSolver:
             "plastic_vec": plastic_vec,
             "plastic_tensor": plastic_tensor,
             "accum_plastic": accum_plastic,
+            "backstress": backstress,
             "displacement": displacement,
             "history": history,
             "stress": stress,
@@ -90,6 +92,7 @@ class AlternatingSolver:
         plastic_vec = self.state["plastic_vec"]
         plastic_tensor = self.state.get("plastic_tensor", np.zeros(psi.shape + (3, 3)))  # accumulated tensor
         accum_plastic = self.state.get("accum_plastic", np.zeros_like(psi))
+        backstress = self.state.get("backstress", np.zeros(psi.shape + (3, 3)))
         displacement = self.state["displacement"]
         history = self.state["history"]
 
@@ -104,6 +107,7 @@ class AlternatingSolver:
             plastic_vec,
             strain=strain,
             stress=stress,
+            backstress=backstress,
             load_axis=self.config.load_axis,
             mech_weight=self.config.mech_plastic_weight,
         )
@@ -113,6 +117,9 @@ class AlternatingSolver:
         plastic = np.clip(plastic + eq_inc, 0.0, 1.0)
         plastic_vec = np.clip(plastic_vec + self.config.plastic_relax * (eps_vec - plastic_vec), 0.0, 1.0)
         accum_plastic = accum_plastic + eq_inc
+        # kinematic hardening (back-stress): simple Prager/Armstrong-Frederick form
+        backstress = backstress + self.coupling.kin_c * epsp_increment - self.coupling.kin_d * eq_inc[..., None, None] * backstress
+        backstress = 0.5 * (backstress + np.swapaxes(backstress, -1, -2))  # enforce symmetry
         # Re-evaluate displacement/strain/stress with updated plastic tensor (one inner iteration)
         displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain, plastic_strain=plastic_tensor)
         stress_vm = von_mises(stress)
@@ -150,13 +157,14 @@ class AlternatingSolver:
                 "crack": crack,
                 "plastic": plastic,
                 "plastic_vec": plastic_vec,
-                "plastic_tensor": plastic_tensor,
-                "accum_plastic": accum_plastic,
-                "displacement": displacement,
-                "history": history,
-                "stress": stress,
-                "stress_vm": stress_vm,
-            }
+            "plastic_tensor": plastic_tensor,
+            "accum_plastic": accum_plastic,
+            "backstress": backstress,
+            "displacement": displacement,
+            "history": history,
+            "stress": stress,
+            "stress_vm": stress_vm,
+        }
         )
         total_E = self.energy.total_energy(
             strain, crack, psi, self.mechanical.stiffness, accum_plastic, grain_mask=self.grain_mask, plastic_tensor=plastic_tensor

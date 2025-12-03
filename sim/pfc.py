@@ -8,12 +8,21 @@ adding extra chemical potential terms (e.g., stress-assisted PFC).
 
 from __future__ import annotations
 
+import os
 from typing import Callable, Tuple
 import numpy as np
 
 from .energy import Array, PFCParameters
 from .operators import GridSpec
 
+# Optional FFT acceleration with pyFFTW
+try:
+    import pyfftw
+
+    _HAS_PYFFTW = True
+except Exception:  # pragma: no cover - optional dependency
+    _HAS_PYFFTW = False
+    pyfftw = None
 
 class PFCEvolver:
     def __init__(
@@ -23,12 +32,23 @@ class PFCEvolver:
         dt: float = 1e-3,
         extra_mu: Callable[[Array], Array] | None = None,
         clip: float | None = None,
+        use_pyfftw: bool = True,
+        fft_threads: int | None = None,
     ) -> None:
         self.grid = grid
         self.params = params
         self.dt = dt
         self.extra_mu = extra_mu  # optional external coupling term μ_extra(ψ)
         self.clip = clip  # optional soft guard; None disables clipping
+        self.fft_threads = fft_threads or max(1, (os.cpu_count() or 1) // 2)
+        self.use_pyfftw = use_pyfftw and _HAS_PYFFTW
+        if self.use_pyfftw:
+            pyfftw.interfaces.cache.enable()
+            self._fftn = lambda a: pyfftw.interfaces.numpy_fft.fftn(a, threads=self.fft_threads)
+            self._ifftn = lambda a: pyfftw.interfaces.numpy_fft.ifftn(a, threads=self.fft_threads)
+        else:
+            self._fftn = np.fft.fftn
+            self._ifftn = np.fft.ifftn
         # 预先计算基础波矢量
         self.base_k_axes = self._compute_base_wave_numbers()
         self.k2 = self._compute_k2(strain=(0.0, 0.0, 0.0))
@@ -64,10 +84,10 @@ class PFCEvolver:
         self.k2 = self._compute_k2(strain)
 
     def chemical_potential(self, psi: Array) -> Array:
-        psi_hat = np.fft.fftn(psi)
+        psi_hat = self._fftn(psi)
         # Swift-Hohenberg 算子
         operator = self.params.r + (self.params.q0**2 - self.k2) ** 2
-        linear = np.fft.ifftn(operator * psi_hat).real
+        linear = self._ifftn(operator * psi_hat).real
         nonlinear = self.params.u * psi**3
         mu = linear + nonlinear
         if self.extra_mu is not None:
@@ -76,12 +96,12 @@ class PFCEvolver:
 
     def step(self, psi: Array) -> Array:
         mu = self.chemical_potential(psi)
-        mu_hat = np.fft.fftn(mu)
-        psi_hat = np.fft.fftn(psi)
+        mu_hat = self._fftn(mu)
+        psi_hat = self._fftn(psi)
         # 守恒型动力学
         update = -self.k2 * mu_hat
         psi_new_hat = psi_hat + self.dt * update
-        psi_new = np.fft.ifftn(psi_new_hat).real
+        psi_new = self._ifftn(psi_new_hat).real
         if self.clip is not None:
             psi_new = np.clip(psi_new, -self.clip, self.clip)
             psi_new = np.nan_to_num(psi_new, nan=0.0, posinf=self.clip, neginf=-self.clip)
