@@ -39,6 +39,7 @@ class CycleResult:
     plastic_mean: float
     plastic_range: float = 0.0
     rss_peak_nd: float = 0.0
+    rss_peak_nd_signed: float = 0.0
 
 
 def run_virtual_cycles(
@@ -104,7 +105,7 @@ def run_virtual_cycles(
         mask = (X >= x0) & (X <= x1) & (Y >= y0) & (Y <= y1) & (Z >= z0) & (Z <= z1)
         structure.fields["crack"][mask] = np.clip(notch_crack_value, 0.0, 1.0)
     
-    mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
+    mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation, fracture_k=fracture.k)
     if initial_vtk:
         initial_vtk.parent.mkdir(parents=True, exist_ok=True)
         write_vtk(initial_vtk, grid, structure.fields, macro_strain=(0.0, 0.0, 0.0), deform_coordinates=False)
@@ -125,7 +126,7 @@ def run_virtual_cycles(
         pfc_params = PFCParameters()
         coupling = PFCCoupling(pfc_params, fracture, mode="density")
         energy = FreeEnergy(copper, fracture, coupling)
-        mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
+        mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation, fracture_k=fracture.k)
         pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
         solver_cfg = SolverConfig(dt=5e-3, crack_relax=crack_relax, plastic_relax=plastic_relax, mech_plastic_weight=0.9, dir_coupling=dir_coupling)
         mu_extra = None
@@ -184,15 +185,19 @@ def run_virtual_cycles(
                 current_strain = target_start + (target_end - target_start) * alpha
                 macro = (current_strain, -poisson_ratio * current_strain, -poisson_ratio * current_strain)
                 energy_val = solver.step(macro)
-                plast_mean = solver.state["plastic"].mean()
+                plast_inst = solver.state.get("plastic_inst", solver.state["plastic"])
+                plast_mean = plast_inst.mean()
                 plastic_min = min(plastic_min, plast_mean)
                 plastic_max = max(plastic_max, plast_mean)
                 stress_tensor = solver.state["stress"]
                 stress_mean = np.mean(stress_tensor, axis=(0, 1, 2))
                 stress_vm_mean = float(np.mean(solver.state.get("stress_vm", 0.0)))
                 # RSS peak tracking (nd) per cycle
-                rss_max, _, _, _ = coupling.compute_rss(stress_tensor, backstress=solver.state.get("backstress"))
+                rss_max, _, _, _, rss_signed_max = coupling.compute_rss(
+                    stress_tensor, backstress=solver.state.get("backstress"), return_signed_max=True
+                )
                 cycle_rss_peak = max(cycle_rss_peak, float(np.mean(rss_max)))
+                cycle_rss_peak_signed = float(np.mean(rss_signed_max)) if rss_signed_max is not None else 0.0
                 stress_strain_log.append(
                     (
                         current_strain,
@@ -201,6 +206,8 @@ def run_virtual_cycles(
                         stress_mean[2, 2],
                         stress_vm_mean,
                         plast_mean,
+                        float(np.mean(rss_max)),
+                        cycle_rss_peak_signed,
                     )
                 )
 
@@ -215,6 +222,7 @@ def run_virtual_cycles(
                             {
                                 "crack": solver.state["crack"],
                                 "plastic": solver.state["plastic"],
+                                "plastic_inst": solver.state.get("plastic_inst"),
                                 "plastic_vec": solver.state["plastic_vec"],
                                 "psi": solver.state["psi"],
                                 "displacement": solver.state["displacement"],
@@ -225,10 +233,20 @@ def run_virtual_cycles(
                         )
 
         crack_mean = solver.state["crack"].mean()
-        plastic_mean = solver.state["plastic"].mean()
+        plastic_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
         plastic_range = max(plastic_max - plastic_min, 0.0)
         crack_delta = max(crack_mean - crack_prev, 0.0)
-        results.append(CycleResult(cycle, energy_val, crack_mean, plastic_mean, plastic_range=plastic_range, rss_peak_nd=cycle_rss_peak))
+        results.append(
+            CycleResult(
+                cycle,
+                energy_val,
+                crack_mean,
+                plastic_mean,
+                plastic_range=plastic_range,
+                rss_peak_nd=cycle_rss_peak,
+                rss_peak_nd_signed=cycle_rss_peak_signed,
+            )
+        )
 
         if dump_dir:
             dump_dir.mkdir(parents=True, exist_ok=True)
@@ -280,18 +298,22 @@ def run_virtual_cycles(
                 fh.write(
                     "macro_strain,plastic_mean,"
                     "sig_xx_nd,sig_yy_nd,sig_zz_nd,sig_vm_nd,"
-                    "sig_xx_GPa,sig_yy_GPa,sig_zz_GPa,sig_vm_GPa\n"
+                    "sig_xx_GPa,sig_yy_GPa,sig_zz_GPa,sig_vm_GPa,"
+                    "rss_mean_nd,rss_mean_signed_nd\n"
                 )
                 for row in stress_strain_log:
                     plastic_mean = row[5]
                     sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd = row[1], row[2], row[3], row[4]
+                    rss_mean_nd = row[6]
+                    rss_mean_signed_nd = row[7]
                     sig_xx_gpa, sig_yy_gpa, sig_zz_gpa, sig_vm_gpa = nondim_stress_to_gpa(
                         np.array([sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd])
                     )
                     fh.write(
                         f"{row[0]:.6e},{plastic_mean:.6e},"
                         f"{sig_xx_nd:.6e},{sig_yy_nd:.6e},{sig_zz_nd:.6e},{sig_vm_nd:.6e},"
-                        f"{sig_xx_gpa:.6e},{sig_yy_gpa:.6e},{sig_zz_gpa:.6e},{sig_vm_gpa:.6e}\n"
+                        f"{sig_xx_gpa:.6e},{sig_yy_gpa:.6e},{sig_zz_gpa:.6e},{sig_vm_gpa:.6e},"
+                        f"{rss_mean_nd:.6e},{rss_mean_signed_nd:.6e}\n"
                     )
 
     if data_output:
@@ -332,11 +354,12 @@ def run_amplitude_sweep(
     last `steady_window` cycles.
     """
     results_summary = []
+    seg_steps = kwargs.pop("segment_steps", 50)
     for amp in amplitudes:
         res, _, _ = run_virtual_cycles(
             cycles=cycles,
             max_strain=amp,
-            segment_steps=kwargs.get("segment_steps", 50),
+            segment_steps=seg_steps,
             monotonic=False,
             **kwargs,
         )

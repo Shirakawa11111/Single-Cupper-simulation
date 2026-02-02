@@ -1,0 +1,8 @@
+# Large simulation outputs
+sim/tests/virtual_cycle_vtk/
+sim/tests/virtual_cycle_lammpstrj/
+sim/tests/amp_runs_parallel_latest/
+sim/tests/amp_runs_parallel/
+
+# macOS
+.DS_Store

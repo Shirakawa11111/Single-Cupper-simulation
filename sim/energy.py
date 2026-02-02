@@ -115,17 +115,17 @@ class PFCCoupling:
         fracture: FractureParameters,
         mode: Literal["density", "plastic"] = "density",
         constraint: Constraint | None = None,
-        # yield stress scaled by c11_ref=168.4 GPa; here ~22 MPa -> ~1.3e-4
-        yield_tau: float = 1.3e-4,
-        # flow scaling (nd): tune with plastic_relax to match σ–ε softening rate
-        flow_scale: float = 5.0e-4,
+        # yield stress scaled by c11_ref=168.4 GPa; here ~18 MPa -> ~1.1e-4
+        yield_tau: float = 1.1e-4,
+        # flow scaling (nd): tuned down to reduce over-softening at higher amplitudes
+        flow_scale: float = 8.0e-4,
         visco_exponent: float = 3.0,  # softer transition
-        visco_ref: float | None = 2.0e-4,
-        # very weak isotropic hardening; main hardening via back-stress
-        linear_hardening: float = 1.0e-4,
+        visco_ref: float | None = 1.0e-4,
+        # strengthen isotropic hardening to support higher-amplitude stiffness
+        linear_hardening: float = 4.0e-4,
         # kinematic back-stress coefficients (Prager/Armstrong-Frederick style)
-        kin_c: float = 2.0e-4,
-        kin_d: float = 1.5,
+        kin_c: float = 2.5e-4,
+        kin_d: float = 1.2,
     ) -> None:
         self.pfc_params = pfc_params
         self.fracture = fracture
@@ -172,7 +172,8 @@ class PFCCoupling:
         tensor: Array,
         backstress: Array | None = None,
         dev_only: bool = True,
-    ) -> tuple[Array, Array, list[Array], list[Array]]:
+        return_signed_max: bool = False,
+    ) -> tuple[Array, Array, list[Array], list[Array], Array | None]:
         """
         Compute resolved shear stress (RSS) on FCC slip systems from a stress-like tensor.
 
@@ -181,6 +182,7 @@ class PFCCoupling:
           rss_stack: RSS magnitude per slip system
           proj_signs: sign of projection per slip system
           mn_list: slip dyads for reuse
+          rss_signed_max (optional): signed RSS of the dominant slip system per point
         """
         tensor_eff = tensor if backstress is None else tensor - backstress
         # enforce symmetry and (optionally) deviatoric part
@@ -189,17 +191,24 @@ class PFCCoupling:
             tr = np.trace(tensor_eff, axis1=-2, axis2=-1)[..., None, None] / 3.0
             tensor_eff = tensor_eff - tr * np.eye(3)
         rss_list: list[Array] = []
+        rss_signed_list: list[Array] = []
         mn_list: list[Array] = []
         proj_signs: list[Array] = []
         for m, n in self.slip_systems:
             mn = np.outer(m, n)
             mn_list.append(mn)
             proj = np.einsum("...ij,ij->...", tensor_eff, mn, optimize=True)
+            rss_signed_list.append(proj)
             rss_list.append(np.abs(proj))
             proj_signs.append(np.sign(proj))
         rss_stack = np.stack(rss_list, axis=0)
+        rss_signed_stack = np.stack(rss_signed_list, axis=0)
         rss_max = np.max(rss_stack, axis=0)
-        return rss_max, rss_stack, proj_signs, mn_list
+        rss_signed_max = None
+        if return_signed_max:
+            idx_max = np.argmax(rss_stack, axis=0)
+            rss_signed_max = np.take_along_axis(rss_signed_stack, idx_max[None, ...], axis=0)[0]
+        return rss_max, rss_stack, proj_signs, mn_list, rss_signed_max
 
     def initialize_density(self, shape: Tuple[int, ...], seed: int = 0) -> Array:
         rng = np.random.default_rng(seed)
@@ -248,7 +257,9 @@ class PFCCoupling:
         if strain is not None:
             # Prefer stress if provided; else use strain. RSS uses deviatoric effective tensor.
             if stress is not None:
-                rss_max, rss_stack, proj_signs, mn_list = self.compute_rss(stress, backstress=backstress, dev_only=True)
+                rss_max, rss_stack, proj_signs, mn_list, _ = self.compute_rss(
+                    stress, backstress=backstress, dev_only=True
+                )
             else:
                 # strain proxy (no deviatoric reduction)
                 rss_list = []
@@ -319,8 +330,9 @@ class PFCCoupling:
         if plastic_eq is None:
             plastic_eq, _, _ = self.plastic_measures(psi, None, None)
         x = plastic_eq / self.fracture.epsilon_half
-        term = 0.5 - self.fracture.gres * np.tanh(2 * (x - 1.0))
-        gc_eff = self.fracture.gc * (term + 0.5 + self.fracture.gres)
+        gc_eff = self.fracture.gc * (
+            self.fracture.gres + (1.0 - self.fracture.gres) * np.exp(-x)
+        )
         if grain_mask is not None:
             gc_eff = gc_eff * (1.0 - grain_scale * grain_mask)
         return gc_eff
@@ -341,10 +353,32 @@ class FreeEnergy:
         self.fracture = fracture
         self.pfc = pfc
 
+    @staticmethod
+    def _split_strain(strain: Array) -> tuple[Array, Array]:
+        """
+        Spectral split of a symmetric strain tensor into positive and negative parts.
+        """
+        vals, vecs = np.linalg.eigh(strain)
+        vals_pos = np.clip(vals, 0.0, None)
+        vals_neg = vals - vals_pos
+        strain_pos = np.zeros_like(strain)
+        strain_neg = np.zeros_like(strain)
+        for i in range(3):
+            vi = vecs[..., i]
+            outer = np.einsum("...a,...b->...ab", vi, vi)
+            strain_pos += vals_pos[..., i][..., None, None] * outer
+            strain_neg += vals_neg[..., i][..., None, None] * outer
+        return strain_pos, strain_neg
+
     def elastic_energy(self, strain: Array, crack: Array, stiffness: Array) -> Array:
+        """
+        Unilateral elastic energy: g*psi_el^+ + psi_el^- with g=(1-phi)^2+k.
+        """
         crack_factor = (1.0 - crack) ** 2 + self.fracture.k
-        energy_density = 0.5 * np.einsum("...ij,...ijkl,...kl->...", strain, stiffness, strain, optimize=True)
-        return crack_factor * energy_density
+        strain_pos, strain_neg = self._split_strain(strain)
+        energy_pos = 0.5 * np.einsum("...ij,...ijkl,...kl->...", strain_pos, stiffness, strain_pos, optimize=True)
+        energy_neg = 0.5 * np.einsum("...ij,...ijkl,...kl->...", strain_neg, stiffness, strain_neg, optimize=True)
+        return crack_factor * energy_pos + energy_neg
 
     def crack_energy(self, crack: Array, toughness: Array) -> Array:
         grad = np.gradient(crack)
@@ -354,15 +388,15 @@ class FreeEnergy:
         return bulk + grad_term
 
     def positive_strain_energy(self, strain: Array, stiffness: Array) -> Array:
-        vals, vecs = np.linalg.eigh(strain)
-        vals_pos = np.clip(vals, 0.0, None)
-        strain_pos = np.einsum("...ik,...k,...jk->...ij", vecs, vals_pos, vecs, optimize=True)
+        strain_pos, _ = self._split_strain(strain)
         return 0.5 * np.einsum("...ij,...ijkl,...kl->...", strain_pos, stiffness, strain_pos, optimize=True)
 
     def pfc_energy(self, psi: Array) -> Array:
         laplacian = sum(np.gradient(np.gradient(psi, axis=i), axis=i) for i in range(psi.ndim))
-        operator = (self.pfc.pfc_params.q0**2 + laplacian) ** 2
-        energy = 0.5 * psi * (self.pfc.pfc_params.r + operator) + self.pfc.pfc_params.u * psi**4 / 4
+        biharmonic = sum(np.gradient(np.gradient(laplacian, axis=i), axis=i) for i in range(psi.ndim))
+        q0 = self.pfc.pfc_params.q0
+        operator_psi = (q0**4) * psi + 2.0 * (q0**2) * laplacian + biharmonic
+        energy = 0.5 * (self.pfc.pfc_params.r * psi * psi + psi * operator_psi) + self.pfc.pfc_params.u * psi**4 / 4
         return np.nan_to_num(energy)
 
     def total_energy(

@@ -74,12 +74,9 @@ class HybridElasticOperator:
         return strain
 
     def stress_from_strain(self, strain: Array) -> Array:
-        lam, mu = (
-            self.material.poisson_ratio
-            * self.material.youngs_modulus
-            / ((1 + self.material.poisson_ratio) * (1 - 2 * self.material.poisson_ratio)),
-            self.material.shear_modulus,
-        )
+        bulk = (self.material.c11 + 2.0 * self.material.c12) / 3.0
+        mu = self.material.c44
+        lam = bulk - 2.0 * mu / 3.0
         trace = np.trace(strain, axis1=-2, axis2=-1)[..., None, None]
         identity = np.eye(strain.shape[-1])
         return 2 * mu * (strain - identity * trace / 3) + lam * trace * identity
