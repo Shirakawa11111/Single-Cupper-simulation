@@ -64,9 +64,8 @@ def write_lammpstrj(
     coords_z = np.linspace(0, Lz - dz, nz)
     
     crack = fields.get("crack", np.zeros((nx, ny, nz)))
-    plastic = fields.get("plastic", np.zeros((nx, ny, nz)))
+    accum_plastic = fields.get("accum_plastic", fields.get("plastic", np.zeros((nx, ny, nz))))
     plastic_inst = fields.get("plastic_inst")
-    accum_plastic = fields.get("accum_plastic")
     psi = fields.get("psi", np.zeros((nx, ny, nz)))
     plastic_vec = fields.get("plastic_vec")
     stress_vm = fields.get("stress_vm")
@@ -77,8 +76,6 @@ def write_lammpstrj(
     extra_scalars = []
     if plastic_inst is not None and plastic_inst.shape == (nx, ny, nz):
         extra_scalars.append("plastic_inst")
-    if accum_plastic is not None and accum_plastic.shape == (nx, ny, nz):
-        extra_scalars.append("accum_plastic")
     if plastic_vec is not None and plastic_vec.shape == (nx, ny, nz, 3):
         extra_scalars.extend(["plastic_xx", "plastic_yy", "plastic_zz"])
     stress_scalars = []
@@ -96,7 +93,7 @@ def write_lammpstrj(
         fh.write(f"0.0 {Lx:.6e}\n")
         fh.write(f"0.0 {Ly:.6e}\n")
         fh.write(f"0.0 {Lz:.6e}\n")
-        cols = ["id", "type", "x", "y", "z", "crack", "plastic", "psi"] + extra_scalars + stress_scalars
+        cols = ["id", "type", "x", "y", "z", "crack", "accum_plastic", "psi"] + extra_scalars + stress_scalars
         fh.write("ITEM: ATOMS " + " ".join(cols) + "\n")
         
         atom_id = 1
@@ -120,13 +117,11 @@ def write_lammpstrj(
                         y_out,
                         z_out,
                         crack[i, j, k],
-                        plastic[i, j, k],
+                        accum_plastic[i, j, k],
                         psi[i, j, k],
                     ]
                     if plastic_inst is not None and plastic_inst.shape == (nx, ny, nz):
                         values.append(plastic_inst[i, j, k])
-                    if accum_plastic is not None and accum_plastic.shape == (nx, ny, nz):
-                        values.append(accum_plastic[i, j, k])
                     if plastic_vec is not None and plastic_vec.shape == (nx, ny, nz, 3):
                         px, py, pz = plastic_vec[i, j, k]
                         values.extend([px, py, pz])
@@ -158,8 +153,10 @@ def write_vtk(
     nx, ny, nz = grid.shape
     dx, dy, dz = grid.spacing
     total_points = nx * ny * nz
-    scalar_fields = {k: v for k, v in fields.items() if v.ndim == 3}
+    scalar_fields = {k: v for k, v in fields.items() if v.ndim == 3 and k != "plastic"}
     vector_fields = {k: v for k, v in fields.items() if v.ndim == 4 and v.shape[-1] == 3}
+    if "accum_plastic" not in scalar_fields and "plastic" in fields:
+        scalar_fields["accum_plastic"] = fields["plastic"]
     macro = macro_strain if macro_strain is not None else (0.0, 0.0, 0.0)
     disp_field = fields.get("displacement")
 
@@ -189,10 +186,10 @@ def write_vtk(
         crack = scalar_fields["crack"]
         scalar_fields["crack_norm"] = np.clip(crack, 0.0, 1.0)
         scalar_fields["crack_clamp03"] = np.clip(crack, 0.0, 0.3)
-    if "plastic" in scalar_fields:
-        plastic = scalar_fields["plastic"]
+    if "accum_plastic" in scalar_fields:
+        plastic = scalar_fields["accum_plastic"]
         maxp = np.max(np.abs(plastic)) + 1e-12
-        scalar_fields["plastic_norm"] = plastic / maxp
+        scalar_fields["accum_plastic_norm"] = plastic / maxp
     if "plastic_vec" in vector_fields:
         pv = vector_fields["plastic_vec"]
         mag = np.linalg.norm(pv, axis=-1)
