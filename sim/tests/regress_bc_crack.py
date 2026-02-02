@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from sim.energy import CopperParameters, FractureParameters, PFCParameters, PFCCoupling, FreeEnergy
-from sim.mechanics import MechanicalEquilibriumSolver, divergence
+from sim.mechanics import MechanicalConfig, MechanicalEquilibriumSolver, divergence
 from sim.operators import GridSpec
 from sim.pfc import PFCEvolver
 from sim.solver import AlternatingSolver, SolverConfig
@@ -60,15 +60,16 @@ def _make_orientation(grid: GridSpec) -> np.ndarray:
     return np.broadcast_to(eye, grid.shape + (3, 3)).copy()
 
 
-def _test_pure_compression() -> float:
+def _test_pure_compression(split_mode: str = "spectral") -> float:
     grid = GridSpec(shape=(16, 8, 4), spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
     orientation = _make_orientation(grid)
     copper = CopperParameters()
     fracture = FractureParameters()
     pfc_params = PFCParameters()
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
-    energy = FreeEnergy(copper, fracture, coupling)
-    mechanical = MechanicalEquilibriumSolver(grid, copper, orientation, fracture_k=fracture.k)
+    energy = FreeEnergy(copper, fracture, coupling, split_mode=split_mode)
+    mech_cfg = MechanicalConfig(unilateral=True, unilateral_mode=split_mode)
+    mechanical = MechanicalEquilibriumSolver(grid, copper, orientation, fracture_k=fracture.k, config=mech_cfg)
     pfc = PFCEvolver(grid, pfc_params, dt=0.0, clip=1.0)
     cfg = SolverConfig(dt=1e-2, crack_relax=1.0, plastic_relax=0.1, mech_plastic_weight=0.8)
     solver = AlternatingSolver(coupling, energy, mechanical, pfc, cfg)
@@ -102,15 +103,16 @@ def _test_patch() -> Tuple[float, float]:
     return div_norm, ratio
 
 
-def _test_mode_I() -> Tuple[float, float]:
+def _test_mode_I(split_mode: str = "spectral") -> Tuple[float, float]:
     grid = GridSpec(shape=(24, 12, 4), spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
     orientation = _make_orientation(grid)
     copper = CopperParameters()
     fracture = FractureParameters(gc=0.6, l0=1.0, k=1e-6, epsilon_half=0.15, gres=0.1)
     pfc_params = PFCParameters()
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
-    energy = FreeEnergy(copper, fracture, coupling)
-    mechanical = MechanicalEquilibriumSolver(grid, copper, orientation, fracture_k=fracture.k)
+    energy = FreeEnergy(copper, fracture, coupling, split_mode=split_mode)
+    mech_cfg = MechanicalConfig(unilateral=True, unilateral_mode=split_mode)
+    mechanical = MechanicalEquilibriumSolver(grid, copper, orientation, fracture_k=fracture.k, config=mech_cfg)
     pfc = PFCEvolver(grid, pfc_params, dt=0.0, clip=1.0)
     cfg = SolverConfig(dt=1e-2, crack_relax=1.0, plastic_relax=0.1, mech_plastic_weight=0.8)
     solver = AlternatingSolver(coupling, energy, mechanical, pfc, cfg)
@@ -127,7 +129,7 @@ def _test_mode_I() -> Tuple[float, float]:
     return phi0, phi1
 
 
-def run(thr: Thresholds) -> Report:
+def run(thr: Thresholds) -> tuple[Report, Dict[str, Dict[str, float] | str]]:
     timings: Dict[str, float] = {}
     t0 = perf_counter()
     t = perf_counter()
@@ -152,6 +154,14 @@ def run(thr: Thresholds) -> Report:
     if delta < thr.modeI_phi_mean_delta_min:
         failures["modeI"] = f"phi_mean_delta {delta:.3e} < {thr.modeI_phi_mean_delta_min:.3e}"
 
+    # Compare spectral vs volumetric split for compression/Mode-I behavior
+    comp_growth_vol = _test_pure_compression(split_mode="volumetric")
+    phi0_vol, phi1_vol = _test_mode_I(split_mode="volumetric")
+    delta_vol = phi1_vol - phi0_vol
+    preferred = "spectral"
+    if comp_growth_vol < comp_growth or (np.isclose(comp_growth_vol, comp_growth) and delta_vol > delta):
+        preferred = "volumetric"
+
     report = Report(
         results=Results(
             compression_phi_growth=comp_growth,
@@ -166,7 +176,18 @@ def run(thr: Thresholds) -> Report:
         passed=len(failures) == 0,
         failures=failures,
     )
-    return report
+    split_compare = {
+        "spectral": {
+            "compression_phi_growth": comp_growth,
+            "modeI_phi_mean_delta": delta,
+        },
+        "volumetric": {
+            "compression_phi_growth": comp_growth_vol,
+            "modeI_phi_mean_delta": delta_vol,
+        },
+        "preferred": preferred,
+    }
+    return report, split_compare
 
 
 def main() -> int:
@@ -193,7 +214,7 @@ def main() -> int:
             patch_stress_std_ratio_max=args.patch_std_ratio_max,
             modeI_phi_mean_delta_min=args.modeI_delta_min,
         )
-    report = run(thr)
+    report, split_compare = run(thr)
 
     payload = {
         "passed": report.passed,
@@ -201,6 +222,7 @@ def main() -> int:
         "thresholds": asdict(report.thresholds),
         "timing": report.timing,
         "failures": report.failures,
+        "split_compare": split_compare,
     }
     text = json.dumps(payload, indent=2)
     print(text)
