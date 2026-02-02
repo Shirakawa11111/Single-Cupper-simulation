@@ -2,14 +2,14 @@
 
 ## 概览
 - 目标：在 3D 下耦合 PFC 密度、损伤/裂纹、等效塑性与力学平衡，模拟单晶铜（及未来多晶）在循环载荷中的裂纹萌生与疲劳规律，并输出可视化/统计用于 Paris、Coffin–Manson 对比。
-- 主要变量：PFC 密度 ψ，裂纹场 φ，等效塑性标量与方向分量，位移场（微观校正 + 宏观总位移），应力张量。
-- 能量框架：弹性正/负能分裂 + 断裂能（韧性随等效塑性退化） + PFC 能 + 取向/晶界项；自由能变分得到化学势，PFC 动力学 ∂tψ = -∇²μ。
+- 主要变量：PFC 密度 ψ，裂纹场 φ，累积等效塑性（accum_plastic）与瞬时代理（plastic_inst）及方向分量（plastic_vec），位移场（微观校正 + 宏观总位移），应力张量。
+- 能量框架：弹性正/负能分裂（谱分裂或体积-偏差分裂可切换） + 断裂能（韧性随累积塑性退化） + PFC 能 + 取向/晶界项；自由能变分得到化学势，PFC 动力学 ∂tψ = -∇²μ。
 
 ## 代码结构（关键文件）
-- `sim/energy.py`：能量项、韧性退化、塑性/方向性驱动；`plastic_measures` 计算等效塑性与方向分量（机械 von Mises + PFC 梯度混合）。
+- `sim/energy.py`：能量项、韧性退化、塑性/方向性驱动；支持谱分裂/体积-偏差分裂；`plastic_measures` 计算等效塑性与方向分量（机械 von Mises + PFC 梯度混合）。
 - `sim/solver.py`：交替求解器（力学 → 塑性松弛 → 裂纹 → PFC），支持方向性驱动、应力耦合 μ_extra，跟踪 stress/stress_vm、plastic_vec。
-- `sim/io.py`：LAMMPS/VTK 输出（VTK 现为二进制 STRUCTURED_GRID，可选变形坐标），附带归一化场与应力、塑性方向分量。
-- `sim/tests/virtual_cycle.py`：虚拟循环载荷驱动脚本（对称三角波），记录 CSV、VTK、LAMMPS，拟合 Paris/Coffin–Manson 斜率。
+- `sim/io.py`：LAMMPS/VTK 输出（VTK 现为二进制 STRUCTURED_GRID，可选变形坐标），输出 accum_plastic/plastic_inst/方向分量与归一化场。
+- `sim/tests/virtual_cycle.py`：虚拟循环载荷驱动脚本（对称三角波），记录 CSV/标准疲劳指标 CSV、VTK、LAMMPS，拟合 Paris/Coffin–Manson 斜率。
 - `report.tex`：项目报告/公式/流程/输出说明（XeLaTeX + ctex）。
 
 ## 运行示例
@@ -23,9 +23,10 @@ python -m sim.tests.virtual_cycle \
   --vtk-dir sim/tests/virtual_cycle_vtk
 ```
 输出：
-- VTK：`sim/tests/virtual_cycle_vtk/anim_frame_*.vtk`（二进制，STRUCTURED_GRID，含 crack/plastic/psi/stress/displacement 等及归一化字段）。
-- LAMMPS dump：`sim/tests/virtual_cycle_*.lammpstrj`（包含 crack, plastic, plastic_inst, accum_plastic, psi, plastic_vec 分量, stress_vm, stress_xx/yy/zz）。
-- CSV：`sim/tests/virtual_cycle.csv`（cycle, energy, crack_mean, plastic_mean, crack_delta, plastic_range）。
+- VTK：`sim/tests/virtual_cycle_vtk/anim_frame_*.vtk`（二进制，STRUCTURED_GRID，含 crack/accum_plastic/plastic_inst/psi/stress/displacement 等及归一化字段）。
+- LAMMPS dump：`sim/tests/virtual_cycle_*.lammpstrj`（包含 crack, accum_plastic, plastic_inst, psi, plastic_vec 分量, stress_vm, stress_xx/yy/zz）。
+- CSV：`sim/tests/virtual_cycle.csv`（cycle, energy, crack_mean, accum_plastic_mean, crack_length, crack_delta, plastic_range）。
+- 标准疲劳指标：`sim/tests/virtual_cycle_analysis.csv`（cycle, a, da_dN, eps_p_half, rss_peak_nd）。
 
 可视化提示：
 - ParaView/Ovito 固定色标，禁用 per-timestep rescale。裂纹用 `crack_clamp03` (0–0.3) 或 `crack_norm` (0–1)；塑性/应力用 0–1；位移查看 `displacement_total`/`disp_total_norm` 或 warp by total displacement。
@@ -35,7 +36,9 @@ python -m sim.tests.virtual_cycle \
 - 方向性裂纹驱动：加载轴塑性分量放大历史能量/驱动力（`dir_coupling` 默认 0.8）。
 - 应力耦合：von Mises 应力归一化后加入 μ_extra，PFC 在高应力区更敏感。
 - 循环载荷：对称三角波 0→+ε_max→0→−ε_max→0，每段 50 步，支持失败阈值提前停，记录每周期 crack/plastic 的均值与增量/范围。
-- 输出：VTK 改为二进制 STRUCTURED_GRID，附归一化场；LAMMPS 去重了多余的 plastic_vec 列。
+- 单向分裂可切换：谱分裂/体积-偏差分裂可选，并在回归中比较 Mode-I/压缩 φ 演化。
+- PFC 更新：引入线性半隐式 FFT 步（默认），显著放宽 dt 稳定性。
+- 输出：VTK 改为二进制 STRUCTURED_GRID，附归一化场；LAMMPS/VTK 统一使用 accum_plastic 与 plastic_inst。
 - 报告：`report.tex` 同步上述公式/流程/输出说明，添加当前结果快照。
 
 ## 当前结果快照（默认参数：128×64×16，缺陷幅值 0.12，ε_max=0.08，dir_coupling=0.8）
@@ -57,7 +60,7 @@ python -m sim.tests.virtual_cycle \
 - 疲劳主脚本 `sim/tests/virtual_cycle.py` 增强：支持缺陷播种输入、缺口种子（notch_box）、预演化步（pre_relax）让缺陷/滑移带先成形；宏观应变包含泊松收缩 (ε, -ν ε, -ν ε)；可选应力耦合到 PFC (`stress_mu_weight`)；韧性缩放 `toughness_scale` 便于促开裂/稳健性调参；逐步 VTK/LAMMPS 输出使用一致的宏观应变。
 - 塑性/力学更新：`plastic_measures` 采用 FCC 正交滑移系 RSS（含符号）和屈服阈值/流动尺度，累积等效塑性（用于韧性退化）与塑性张量（本征应变）。力学求解与能量使用 $(\varepsilon - \varepsilon^p)$；支持晶界弱化 mask。输出可选应力–应变曲线 CSV（`stress_strain_csv`）。
 - 输出宏观应力应变：`virtual_cycle.py` 可选写出逐步的平均应力-应变曲线（含 von Mises）到 CSV（`stress_strain_csv`），便于快速绘制。
-- 诊断：`sim/energy.py` 增加裂纹驱动力/能量一致性的一次性诊断接口（`diagnose_crack_energy_consistency`）。
+- 诊断：`sim/energy.py` 增加裂纹驱动力/能量一致性的一次性诊断接口（`diagnose_crack_energy_consistency` / `diagnose_phi_consistency`）。
 
 ## 回归测试（自动化）
 新增三类回归脚本，用于验证边界处理与裂纹驱动力：
@@ -75,8 +78,11 @@ python sim/tests/regress_bc_crack_micron.py
 
 ### 统一入口（推荐）
 ```bash
-python sim/tests/regress_all.py --strict --log-dir /tmp/regress_logs --output /tmp/regress_all.json
+python sim/tests/regress_all.py --strict --task boundary_crack
 ```
+
+默认日志位置（自动生成）：`sim/tests/regress_runs/YYYY-MM-DD/<task>/`  
+其中包含：`summary.json` 与每个子测试的 `*.json`/`*.stdout`/`*.stderr`。
 
 ### 严格阈值 + JSON 输出
 ```bash
@@ -91,5 +97,6 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
 - `thresholds`：判定阈值
 - `timing`：每个子测试与总耗时（秒）
 - `passed` / `failures`
+ - `split_compare`：谱分裂 vs 体积-偏差分裂的 Mode-I/压缩对比
 
 > 说明：大网格脚本采用 **三向压缩**（避免单向压缩引入局部拉应变），Mode‑I 脚本包含多周期加载。

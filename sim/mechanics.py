@@ -5,7 +5,7 @@ Mechanical equilibrium solver for anisotropic elasticity.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Literal
 
 import numpy as np
 from scipy.sparse.linalg import LinearOperator, cg
@@ -65,6 +65,7 @@ class MechanicalConfig:
     max_iters: int = 200
     tol: float = 1e-5
     unilateral: bool = True
+    unilateral_mode: Literal["spectral", "volumetric"] = "spectral"
     outer_max_iters: int = 5
     outer_tol: float = 1e-6
 
@@ -91,7 +92,7 @@ class MechanicalEquilibriumSolver:
         self.fracture_k = fracture_k if fracture_k is not None else getattr(material, "residual_stiffness", 1e-6)
 
     @staticmethod
-    def _split_positive(strain: Array) -> tuple[Array, Array, Array]:
+    def _split_positive_spectral(strain: Array) -> tuple[Array, Array, Array]:
         """
         Return eigenvectors (columns), positive-mask, and strain_positive for a symmetric tensor field.
         """
@@ -105,7 +106,7 @@ class MechanicalEquilibriumSolver:
         return vecs, mask, strain_pos
 
     @staticmethod
-    def _project_positive(strain: Array, vecs: Array, mask: Array) -> Array:
+    def _project_positive_spectral(strain: Array, vecs: Array, mask: Array) -> Array:
         """
         Linearized projector using frozen eigenvectors and sign mask.
         """
@@ -117,6 +118,33 @@ class MechanicalEquilibriumSolver:
             outer = np.einsum("...a,...b->...ab", vi, vi)
             strain_pos += diag_pos[..., i][..., None, None] * outer
         return strain_pos
+
+    @staticmethod
+    def _split_positive_volumetric(strain: Array) -> tuple[Array, Array, Array]:
+        """
+        Volumetric/deviatoric split: tensile volumetric part + full deviatoric.
+        Returns mask (tr>0), strain_pos, strain_neg.
+        """
+        tr = np.trace(strain, axis1=-2, axis2=-1)
+        mask = (tr > 0).astype(float)
+        tr_pos = np.clip(tr, 0.0, None)
+        tr_neg = tr - tr_pos
+        eye = np.eye(3)
+        dev = strain - (tr[..., None, None] / 3.0) * eye
+        strain_pos = dev + (tr_pos[..., None, None] / 3.0) * eye
+        strain_neg = (tr_neg[..., None, None] / 3.0) * eye
+        return mask, strain_pos, strain_neg
+
+    @staticmethod
+    def _project_positive_volumetric(strain: Array, mask: Array) -> Array:
+        """
+        Linearized volumetric projector using frozen sign of tr(strain).
+        """
+        tr = np.trace(strain, axis1=-2, axis2=-1)
+        tr_pos = tr * mask
+        eye = np.eye(3)
+        dev = strain - (tr[..., None, None] / 3.0) * eye
+        return dev + (tr_pos[..., None, None] / 3.0) * eye
 
     def solve(
         self,
@@ -133,14 +161,6 @@ class MechanicalEquilibriumSolver:
             macro[..., i, i] = macro_strain[i]
         if plastic_strain is None:
             plastic_strain = np.zeros_like(macro)
-
-        def _build_rhs(vecs_cached: Array, mask_cached: Array) -> Array:
-            strain_eff_macro = macro - plastic_strain
-            strain_macro_pos = self._project_positive(strain_eff_macro, vecs_cached, mask_cached)
-            strain_macro_neg = strain_eff_macro - strain_macro_pos
-            stress_rhs = g_mask * np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_macro_pos, optimize=True)
-            stress_rhs += np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_macro_neg, optimize=True)
-            return -divergence(stress_rhs, self.spacing, self.grid.periodic).reshape(-1)
 
         if not self.config.unilateral:
             def matvec(vec: np.ndarray) -> np.ndarray:
@@ -164,20 +184,41 @@ class MechanicalEquilibriumSolver:
             for _ in range(self.config.outer_max_iters):
                 strain_total = sym_grad(u, self.spacing, self.grid.periodic) + macro
                 strain_eff = strain_total - plastic_strain
-                vecs_cached, mask_cached, _ = self._split_positive(strain_eff)
+                if self.config.unilateral_mode == "spectral":
+                    vecs_cached, mask_cached, _ = self._split_positive_spectral(strain_eff)
+
+                    def project_positive(strain_loc: Array) -> Array:
+                        return self._project_positive_spectral(strain_loc, vecs_cached, mask_cached)
+
+                elif self.config.unilateral_mode == "volumetric":
+                    mask_cached, _, _ = self._split_positive_volumetric(strain_eff)
+
+                    def project_positive(strain_loc: Array) -> Array:
+                        return self._project_positive_volumetric(strain_loc, mask_cached)
+
+                else:
+                    raise ValueError(f"Unknown unilateral_mode: {self.config.unilateral_mode}")
+
+                def _build_rhs() -> Array:
+                    strain_eff_macro = macro - plastic_strain
+                    strain_macro_pos = project_positive(strain_eff_macro)
+                    strain_macro_neg = strain_eff_macro - strain_macro_pos
+                    stress_rhs = g_mask * np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_macro_pos, optimize=True)
+                    stress_rhs += np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_macro_neg, optimize=True)
+                    return -divergence(stress_rhs, self.spacing, self.grid.periodic).reshape(-1)
 
                 def matvec(vec: np.ndarray) -> np.ndarray:
                     u_loc = vec.reshape(crack.shape + (3,))
                     strain = sym_grad(u_loc, self.spacing, self.grid.periodic)
                     strain_eff_loc = strain - plastic_strain
-                    strain_pos = self._project_positive(strain_eff_loc, vecs_cached, mask_cached)
+                    strain_pos = project_positive(strain_eff_loc)
                     strain_neg = strain_eff_loc - strain_pos
                     stress = g_mask * np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_pos, optimize=True)
                     stress += np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_neg, optimize=True)
                     divsigma = divergence(stress, self.spacing, self.grid.periodic)
                     return divsigma.reshape(-1)
 
-                rhs = _build_rhs(vecs_cached, mask_cached)
+                rhs = _build_rhs()
                 linop = LinearOperator((self.num_dofs, self.num_dofs), matvec)
                 u0 = u.reshape(-1)
                 solution, info = cg(linop, rhs, x0=u0, rtol=self.config.tol, atol=0.0, maxiter=self.config.max_iters)
@@ -191,8 +232,13 @@ class MechanicalEquilibriumSolver:
         total_strain = sym_grad(u, self.spacing, self.grid.periodic) + macro
         strain_eff = total_strain - plastic_strain
         if self.config.unilateral:
-            vecs_final, mask_final, strain_pos = self._split_positive(strain_eff)
-            strain_neg = strain_eff - strain_pos
+            if self.config.unilateral_mode == "spectral":
+                _, _, strain_pos = self._split_positive_spectral(strain_eff)
+                strain_neg = strain_eff - strain_pos
+            elif self.config.unilateral_mode == "volumetric":
+                _, strain_pos, strain_neg = self._split_positive_volumetric(strain_eff)
+            else:
+                raise ValueError(f"Unknown unilateral_mode: {self.config.unilateral_mode}")
             stress = g_mask * np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_pos, optimize=True)
             stress += np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_neg, optimize=True)
         else:

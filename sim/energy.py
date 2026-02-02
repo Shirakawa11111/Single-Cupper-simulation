@@ -459,27 +459,41 @@ class FreeEnergy:
         copper: CopperParameters,
         fracture: FractureParameters,
         pfc: PFCCoupling,
+        split_mode: Literal["spectral", "volumetric"] = "spectral",
     ) -> None:
         self.copper = copper
         self.fracture = fracture
         self.pfc = pfc
+        self.split_mode = split_mode
 
-    @staticmethod
-    def _split_strain(strain: Array) -> tuple[Array, Array]:
+    def _split_strain(self, strain: Array) -> tuple[Array, Array]:
         """
-        Spectral split of a symmetric strain tensor into positive and negative parts.
+        Split a symmetric strain tensor into positive/negative parts.
+        - spectral: eigenvalue split
+        - volumetric: volumetric/deviatoric split with tensile volumetric part
         """
-        vals, vecs = np.linalg.eigh(strain)
-        vals_pos = np.clip(vals, 0.0, None)
-        vals_neg = vals - vals_pos
-        strain_pos = np.zeros_like(strain)
-        strain_neg = np.zeros_like(strain)
-        for i in range(3):
-            vi = vecs[..., i]
-            outer = np.einsum("...a,...b->...ab", vi, vi)
-            strain_pos += vals_pos[..., i][..., None, None] * outer
-            strain_neg += vals_neg[..., i][..., None, None] * outer
-        return strain_pos, strain_neg
+        if self.split_mode == "spectral":
+            vals, vecs = np.linalg.eigh(strain)
+            vals_pos = np.clip(vals, 0.0, None)
+            vals_neg = vals - vals_pos
+            strain_pos = np.zeros_like(strain)
+            strain_neg = np.zeros_like(strain)
+            for i in range(3):
+                vi = vecs[..., i]
+                outer = np.einsum("...a,...b->...ab", vi, vi)
+                strain_pos += vals_pos[..., i][..., None, None] * outer
+                strain_neg += vals_neg[..., i][..., None, None] * outer
+            return strain_pos, strain_neg
+        if self.split_mode == "volumetric":
+            tr = np.trace(strain, axis1=-2, axis2=-1)
+            tr_pos = np.clip(tr, 0.0, None)
+            tr_neg = tr - tr_pos
+            eye = np.eye(3)
+            dev = strain - (tr[..., None, None] / 3.0) * eye
+            strain_pos = dev + (tr_pos[..., None, None] / 3.0) * eye
+            strain_neg = (tr_neg[..., None, None] / 3.0) * eye
+            return strain_pos, strain_neg
+        raise ValueError(f"Unknown split_mode: {self.split_mode}")
 
     def elastic_energy(self, strain: Array, crack: Array, stiffness: Array) -> Array:
         """
@@ -519,13 +533,89 @@ class FreeEnergy:
         plastic_eq: Array | None = None,
         grain_mask: Array | None = None,
         plastic_tensor: Array | None = None,
+        spacing: float | tuple[float, ...] = 1.0,
+        periodic: tuple[bool, ...] | None = None,
     ) -> float:
         toughness = self.pfc.degraded_toughness(psi, plastic_eq, grain_mask=grain_mask)
         strain_eff = strain if plastic_tensor is None else strain - plastic_tensor
         elastic = self.elastic_energy(strain_eff, crack, stiffness)
-        crack_e = self.crack_energy(crack, toughness)
         pfc_e = self.pfc_energy(psi)
-        return float(np.sum(elastic + crack_e + pfc_e))
+        crack_e = crack_energy_consistent(
+            crack,
+            toughness,
+            self.fracture.l0,
+            spacing=spacing,
+            periodic=periodic,
+        )
+        return float(np.sum(elastic + pfc_e)) + crack_e
+
+    def diagnose_phi_consistency(
+        self,
+        strain: Array,
+        crack: Array,
+        psi: Array,
+        stiffness: Array,
+        plastic_eq: Array | None = None,
+        grain_mask: Array | None = None,
+        plastic_tensor: Array | None = None,
+        spacing: float | tuple[float, ...] = 1.0,
+        periodic: tuple[bool, ...] | None = None,
+        eps: float = 1e-7,
+        seed: int = 0,
+    ) -> dict[str, float]:
+        """
+        One-off diagnostic: compare finite-difference dE/dphi of total_energy
+        against the discrete crack driving force plus elastic degradation term.
+        This is a weak consistency check (no irreversibility/history enforcement).
+        """
+        rng = np.random.default_rng(seed)
+        direction = rng.standard_normal(crack.shape)
+        direction = direction / (np.linalg.norm(direction) + 1e-12)
+
+        e0 = self.total_energy(
+            strain,
+            crack,
+            psi,
+            stiffness,
+            plastic_eq=plastic_eq,
+            grain_mask=grain_mask,
+            plastic_tensor=plastic_tensor,
+            spacing=spacing,
+            periodic=periodic,
+        )
+        e1 = self.total_energy(
+            strain,
+            crack + eps * direction,
+            psi,
+            stiffness,
+            plastic_eq=plastic_eq,
+            grain_mask=grain_mask,
+            plastic_tensor=plastic_tensor,
+            spacing=spacing,
+            periodic=periodic,
+        )
+        fd = (e1 - e0) / eps
+
+        toughness = self.pfc.degraded_toughness(psi, plastic_eq, grain_mask=grain_mask)
+        strain_eff = strain if plastic_tensor is None else strain - plastic_tensor
+        pos_energy = self.positive_strain_energy(strain_eff, stiffness)
+        drive = crack_driving_force(
+            crack,
+            toughness,
+            self.fracture.l0,
+            spacing=spacing,
+            periodic=periodic,
+        )
+        dphi = drive - 2.0 * (1.0 - crack) * pos_energy
+        inner = float(np.sum(dphi * direction))
+        abs_err = float(abs(fd - inner))
+        rel_err = float(abs_err / (abs(fd) + abs(inner) + 1e-12))
+        return {
+            "fd": float(fd),
+            "inner": inner,
+            "abs_err": abs_err,
+            "rel_err": rel_err,
+        }
 
 
 __all__ = [

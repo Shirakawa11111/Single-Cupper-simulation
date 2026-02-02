@@ -9,7 +9,7 @@ adding extra chemical potential terms (e.g., stress-assisted PFC).
 from __future__ import annotations
 
 import os
-from typing import Callable, Tuple
+from typing import Callable, Literal, Tuple
 import numpy as np
 
 from .energy import Array, PFCParameters
@@ -34,6 +34,7 @@ class PFCEvolver:
         clip: float | None = None,
         use_pyfftw: bool = True,
         fft_threads: int | None = None,
+        scheme: Literal["explicit", "semi-implicit"] = "semi-implicit",
     ) -> None:
         self.grid = grid
         self.params = params
@@ -42,6 +43,7 @@ class PFCEvolver:
         self.clip = clip  # optional soft guard; None disables clipping
         self.fft_threads = fft_threads or max(1, (os.cpu_count() or 1) // 2)
         self.use_pyfftw = use_pyfftw and _HAS_PYFFTW
+        self.scheme = scheme
         if self.use_pyfftw:
             pyfftw.interfaces.cache.enable()
             self._fftn = lambda a: pyfftw.interfaces.numpy_fft.fftn(a, threads=self.fft_threads)
@@ -95,12 +97,25 @@ class PFCEvolver:
         return mu
 
     def step(self, psi: Array) -> Array:
-        mu = self.chemical_potential(psi)
-        mu_hat = self._fftn(mu)
         psi_hat = self._fftn(psi)
-        # 守恒型动力学
-        update = -self.k2 * mu_hat
-        psi_new_hat = psi_hat + self.dt * update
+        # Swift-Hohenberg 线性算子（傅里叶域）
+        linear_coeff = self.params.r + (self.params.q0**2 - self.k2) ** 2
+        if self.scheme == "explicit":
+            mu = self.chemical_potential(psi)
+            mu_hat = self._fftn(mu)
+            # 守恒型动力学
+            update = -self.k2 * mu_hat
+            psi_new_hat = psi_hat + self.dt * update
+        elif self.scheme == "semi-implicit":
+            # Treat linear part implicitly, nonlinear/extra explicitly.
+            nonlinear = self.params.u * psi**3
+            extra = self.extra_mu(psi) if self.extra_mu is not None else 0.0
+            nonlinear_hat = self._fftn(nonlinear + extra)
+            denom = 1.0 + self.dt * self.k2 * linear_coeff
+            update = self.dt * self.k2 * nonlinear_hat
+            psi_new_hat = (psi_hat - update) / denom
+        else:
+            raise ValueError(f"Unknown PFC scheme: {self.scheme}")
         psi_new = self._ifftn(psi_new_hat).real
         if self.clip is not None:
             psi_new = np.clip(psi_new, -self.clip, self.clip)

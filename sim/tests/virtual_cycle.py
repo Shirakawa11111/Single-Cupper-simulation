@@ -17,6 +17,7 @@ from typing import List, Tuple
 
 import numpy as np
 
+from ..analysis import crack_growth_rate, crack_length
 from ..energy import CopperParameters, FreeEnergy, FractureParameters, PFCParameters, PFCCoupling
 from ..io import write_atomic_data, write_lammpstrj, write_vtk
 from ..mechanics import MechanicalEquilibriumSolver
@@ -36,7 +37,8 @@ class CycleResult:
     cycle: int
     load: float
     crack_mean: float
-    plastic_mean: float
+    accum_plastic_mean: float
+    crack_length: float = 0.0
     plastic_range: float = 0.0
     rss_peak_nd: float = 0.0
     rss_peak_nd_signed: float = 0.0
@@ -50,6 +52,7 @@ def run_virtual_cycles(
     monotonic: bool = False,       # 若为 True，仅做 0->+max_strain 单调拉伸，便于 σ–ε 标定
     failure_threshold: float = 0.98,  # 平均裂纹达到此值提前终止
     csv_output: Path | None = None,
+    analysis_csv: Path | None = None,  # 标准疲劳指标 CSV（a(N), da/dN, Δεp/2, rss_peak）
     data_output: Path | None = None,
     dump_dir: Path | None = None,
     vtk_dir: Path | None = None,
@@ -66,6 +69,9 @@ def run_virtual_cycles(
     poisson_ratio: float = 0.34,        # 泊松比，用于宏观应变的侧向收缩
     toughness_scale: float = 0.1,       # 韧性缩放因子 (<1 降低 Gc 促开裂；>1 提高韧性)
     stress_strain_csv: Path | None = None,  # 可选：逐步输出宏观应力-应变曲线
+    crack_length_threshold: float = 0.95,   # 裂纹长度阈值
+    crack_length_x0: float | None = None,   # 裂纹尖端参考点（None=自动）
+    crack_length_axis: int = 0,             # 裂纹长度统计轴
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 初始化
@@ -146,6 +152,19 @@ def run_virtual_cycles(
             structure.fields[key] = solver.state[key].copy()
         if initial_vtk:
             write_vtk(initial_vtk.with_name(initial_vtk.stem + "_prerelax.vtk"), grid, structure.fields, macro_strain=(0.0, 0.0, 0.0), deform_coordinates=False)
+    # 统一裂纹长度参考点 x0
+    crack_length_x0_resolved = crack_length_x0
+    if crack_length_x0_resolved is None:
+        if notch_box is not None:
+            crack_length_x0_resolved = notch_box[0][1]
+        else:
+            crack_length_x0_resolved = crack_length(
+                structure.fields["crack"],
+                grid,
+                axis=crack_length_axis,
+                threshold=crack_length_threshold,
+                x0=0.0,
+            )
     # pfc_extra_mu 将在 solver 内传入
     pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
     solver_cfg = SolverConfig(dt=5e-3, crack_relax=crack_relax, plastic_relax=plastic_relax, mech_plastic_weight=0.9, dir_coupling=dir_coupling)
@@ -174,7 +193,6 @@ def run_virtual_cycles(
         print(f"=== Starting Cycle {cycle} ===")
         energy_val = 0.0
         plastic_min, plastic_max = np.inf, -np.inf
-        crack_prev = results[-1].crack_mean if results else 0.0
         cycle_rss_peak = -np.inf
         
         for target in load_segments:
@@ -186,9 +204,10 @@ def run_virtual_cycles(
                 macro = (current_strain, -poisson_ratio * current_strain, -poisson_ratio * current_strain)
                 energy_val = solver.step(macro)
                 plast_inst = solver.state.get("plastic_inst", solver.state["plastic"])
-                plast_mean = plast_inst.mean()
-                plastic_min = min(plastic_min, plast_mean)
-                plastic_max = max(plastic_max, plast_mean)
+                plast_inst_mean = plast_inst.mean()
+                accum_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
+                plastic_min = min(plastic_min, plast_inst_mean)
+                plastic_max = max(plastic_max, plast_inst_mean)
                 stress_tensor = solver.state["stress"]
                 stress_mean = np.mean(stress_tensor, axis=(0, 1, 2))
                 stress_vm_mean = float(np.mean(solver.state.get("stress_vm", 0.0)))
@@ -205,7 +224,8 @@ def run_virtual_cycles(
                         stress_mean[1, 1],
                         stress_mean[2, 2],
                         stress_vm_mean,
-                        plast_mean,
+                        plast_inst_mean,
+                        accum_mean,
                         float(np.mean(rss_max)),
                         cycle_rss_peak_signed,
                     )
@@ -233,15 +253,22 @@ def run_virtual_cycles(
                         )
 
         crack_mean = solver.state["crack"].mean()
-        plastic_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
+        accum_plastic_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
+        crack_len = crack_length(
+            solver.state["crack"],
+            grid,
+            axis=crack_length_axis,
+            threshold=crack_length_threshold,
+            x0=crack_length_x0_resolved,
+        )
         plastic_range = max(plastic_max - plastic_min, 0.0)
-        crack_delta = max(crack_mean - crack_prev, 0.0)
         results.append(
             CycleResult(
-                cycle,
-                energy_val,
-                crack_mean,
-                plastic_mean,
+                cycle=cycle,
+                load=energy_val,
+                crack_mean=crack_mean,
+                accum_plastic_mean=accum_plastic_mean,
+                crack_length=crack_len,
                 plastic_range=plastic_range,
                 rss_peak_nd=cycle_rss_peak,
                 rss_peak_nd_signed=cycle_rss_peak_signed,
@@ -266,9 +293,10 @@ def run_virtual_cycles(
     # 3. 后处理统计：Paris-like 与 Coffin–Manson
     plastic_ranges = []
     crack_deltas = []
+    a_vals = [r.crack_length for r in results]
     for i, r in enumerate(results):
-        prev_crack = results[i - 1].crack_mean if i > 0 else r.crack_mean
-        crack_deltas.append(max(r.crack_mean - prev_crack, 1e-9))
+        prev_a = a_vals[i - 1] if i > 0 else a_vals[i]
+        crack_deltas.append(max(a_vals[i] - prev_a, 1e-9))
         plastic_ranges.append(max(r.plastic_range, 1e-9))
 
     cycles_arr = np.arange(1, len(results) + 1, dtype=float)
@@ -288,29 +316,47 @@ def run_virtual_cycles(
         if csv_output:
             csv_output.parent.mkdir(parents=True, exist_ok=True)
             with csv_output.open("w", encoding="utf-8") as fh:
-                fh.write("cycle,energy,crack_mean,plastic_mean,crack_delta,plastic_range\n")
-                prev_crack = results[0].crack_mean if results else 0.0
+                fh.write("cycle,energy,crack_mean,accum_plastic_mean,crack_length,crack_delta,plastic_range\n")
                 for r, pd, pr in zip(results, crack_deltas, plastic_ranges):
-                    fh.write(f"{r.cycle},{r.load:.6e},{r.crack_mean:.6e},{r.plastic_mean:.6e},{pd:.6e},{pr:.6e}\n")
+                    fh.write(
+                        f"{r.cycle},{r.load:.6e},{r.crack_mean:.6e},"
+                        f"{r.accum_plastic_mean:.6e},{r.crack_length:.6e},{pd:.6e},{pr:.6e}\n"
+                    )
+        if analysis_csv:
+            analysis_csv.parent.mkdir(parents=True, exist_ok=True)
+            cycles_out = np.array([r.cycle for r in results], dtype=float)
+            a_arr = np.array(a_vals, dtype=float)
+            if len(a_arr) > 1:
+                da = crack_growth_rate(a_arr, cycles_out)
+                da = np.concatenate(([0.0], da))
+            else:
+                da = np.zeros_like(a_arr)
+            eps_p_half = 0.5 * np.array([r.plastic_range for r in results], dtype=float)
+            rss_peak = np.array([r.rss_peak_nd for r in results], dtype=float)
+            with analysis_csv.open("w", encoding="utf-8") as fh:
+                fh.write("cycle,a,da_dN,eps_p_half,rss_peak_nd\n")
+                for c, a, dadn, eph, rp in zip(cycles_out, a_arr, da, eps_p_half, rss_peak):
+                    fh.write(f"{int(c)},{a:.6e},{dadn:.6e},{eph:.6e},{rp:.6e}\n")
         if stress_strain_csv and stress_strain_log:
             stress_strain_csv.parent.mkdir(parents=True, exist_ok=True)
             with stress_strain_csv.open("w", encoding="utf-8") as fh:
                 fh.write(
-                    "macro_strain,plastic_mean,"
+                    "macro_strain,plastic_inst_mean,accum_plastic_mean,"
                     "sig_xx_nd,sig_yy_nd,sig_zz_nd,sig_vm_nd,"
                     "sig_xx_GPa,sig_yy_GPa,sig_zz_GPa,sig_vm_GPa,"
                     "rss_mean_nd,rss_mean_signed_nd\n"
                 )
                 for row in stress_strain_log:
-                    plastic_mean = row[5]
+                    plast_inst_mean = row[5]
+                    accum_mean = row[6]
                     sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd = row[1], row[2], row[3], row[4]
-                    rss_mean_nd = row[6]
-                    rss_mean_signed_nd = row[7]
+                    rss_mean_nd = row[7]
+                    rss_mean_signed_nd = row[8]
                     sig_xx_gpa, sig_yy_gpa, sig_zz_gpa, sig_vm_gpa = nondim_stress_to_gpa(
                         np.array([sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd])
                     )
                     fh.write(
-                        f"{row[0]:.6e},{plastic_mean:.6e},"
+                        f"{row[0]:.6e},{plast_inst_mean:.6e},{accum_mean:.6e},"
                         f"{sig_xx_nd:.6e},{sig_yy_nd:.6e},{sig_zz_nd:.6e},{sig_vm_nd:.6e},"
                         f"{sig_xx_gpa:.6e},{sig_yy_gpa:.6e},{sig_zz_gpa:.6e},{sig_vm_gpa:.6e},"
                         f"{rss_mean_nd:.6e},{rss_mean_signed_nd:.6e}\n"
@@ -379,6 +425,7 @@ def run_amplitude_sweep(
 if __name__ == "__main__":
     run_virtual_cycles(
         csv_output=Path("sim/tests/virtual_cycle.csv"),
+        analysis_csv=Path("sim/tests/virtual_cycle_analysis.csv"),
         data_output=Path("sim/tests/virtual_cycle.data"),
         dump_dir=Path("sim/tests/virtual_cycle_lammpstrj"),
         vtk_dir=Path("sim/tests/virtual_cycle_vtk"),

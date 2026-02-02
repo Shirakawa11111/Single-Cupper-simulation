@@ -211,7 +211,15 @@ class AlternatingSolver:
             }
         )
         total_E = self.energy.total_energy(
-            strain, crack, psi, self.mechanical.stiffness, accum_plastic, grain_mask=self.grain_mask, plastic_tensor=plastic_tensor
+            strain,
+            crack,
+            psi,
+            self.mechanical.stiffness,
+            accum_plastic,
+            grain_mask=self.grain_mask,
+            plastic_tensor=plastic_tensor,
+            spacing=self.mechanical.spacing,
+            periodic=self.mechanical.grid.periodic,
         )
         return total_E
 
