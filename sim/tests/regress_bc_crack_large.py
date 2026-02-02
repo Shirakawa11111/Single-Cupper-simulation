@@ -17,7 +17,6 @@ if str(ROOT) not in sys.path:
 import argparse
 import json
 from dataclasses import asdict, dataclass
-from time import perf_counter
 from typing import Dict, Tuple
 
 import numpy as np
@@ -53,7 +52,6 @@ class Results:
 class Report:
     results: Results
     thresholds: Thresholds
-    timing: Dict[str, float]
     passed: bool
     failures: Dict[str, str]
 
@@ -159,20 +157,11 @@ def _modeI_cyclic(
 
 
 def run(thr: Thresholds) -> Report:
-    timings: Dict[str, float] = {}
-    t0 = perf_counter()
-    t = perf_counter()
     comp_growth = _compression_test(grid_shape=(24, 12, 6), steps=5, eps=-0.005)
-    timings["compression_s"] = perf_counter() - t
-    t = perf_counter()
     div_norm, ratio = _patch_test(grid_shape=(20, 20, 20))
-    timings["patch_s"] = perf_counter() - t
-    t = perf_counter()
     phi0, phi1, comp_max = _modeI_cyclic(
         grid_shape=(32, 16, 8), cycles=2, seg_steps=5, eps_max=0.006, eps_min=-0.003
     )
-    timings["modeI_s"] = perf_counter() - t
-    timings["total_s"] = perf_counter() - t0
     delta = phi1 - phi0
 
     failures: Dict[str, str] = {}
@@ -198,7 +187,6 @@ def run(thr: Thresholds) -> Report:
             modeI_compression_growth_max=comp_max,
         ),
         thresholds=thr,
-        timing=timings,
         passed=len(failures) == 0,
         failures=failures,
     )
@@ -208,7 +196,6 @@ def run(thr: Thresholds) -> Report:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="", help="Optional JSON output path (default: stdout only)")
-    parser.add_argument("--strict", action="store_true", help="Use stricter thresholds")
     parser.add_argument("--compression-max", type=float, default=Thresholds.compression_phi_growth_max)
     parser.add_argument("--patch-div-max", type=float, default=Thresholds.patch_div_norm_max)
     parser.add_argument("--patch-std-ratio-max", type=float, default=Thresholds.patch_stress_std_ratio_max)
@@ -216,29 +203,19 @@ def main() -> int:
     parser.add_argument("--modeI-comp-max", type=float, default=Thresholds.modeI_compression_growth_max)
     args = parser.parse_args()
 
-    if args.strict:
-        thr = Thresholds(
-            compression_phi_growth_max=min(args.compression_max, 1e-9),
-            patch_div_norm_max=min(args.patch_div_max, 1e-9),
-            patch_stress_std_ratio_max=min(args.patch_std_ratio_max, 1e-9),
-            modeI_phi_mean_delta_min=max(args.modeI_delta_min, 5e-5),
-            modeI_compression_growth_max=min(args.modeI_comp_max, 1e-6),
-        )
-    else:
-        thr = Thresholds(
-            compression_phi_growth_max=args.compression_max,
-            patch_div_norm_max=args.patch_div_max,
-            patch_stress_std_ratio_max=args.patch_std_ratio_max,
-            modeI_phi_mean_delta_min=args.modeI_delta_min,
-            modeI_compression_growth_max=args.modeI_comp_max,
-        )
+    thr = Thresholds(
+        compression_phi_growth_max=args.compression_max,
+        patch_div_norm_max=args.patch_div_max,
+        patch_stress_std_ratio_max=args.patch_std_ratio_max,
+        modeI_phi_mean_delta_min=args.modeI_delta_min,
+        modeI_compression_growth_max=args.modeI_comp_max,
+    )
     report = run(thr)
 
     payload = {
         "passed": report.passed,
         "results": asdict(report.results),
         "thresholds": asdict(report.thresholds),
-        "timing": report.timing,
         "failures": report.failures,
     }
     text = json.dumps(payload, indent=2)
