@@ -66,6 +66,7 @@ def write_lammpstrj(
     crack = fields.get("crack", np.zeros((nx, ny, nz)))
     plastic = fields.get("plastic", np.zeros((nx, ny, nz)))
     plastic_inst = fields.get("plastic_inst")
+    accum_plastic = fields.get("accum_plastic")
     psi = fields.get("psi", np.zeros((nx, ny, nz)))
     plastic_vec = fields.get("plastic_vec")
     stress_vm = fields.get("stress_vm")
@@ -76,6 +77,8 @@ def write_lammpstrj(
     extra_scalars = []
     if plastic_inst is not None and plastic_inst.shape == (nx, ny, nz):
         extra_scalars.append("plastic_inst")
+    if accum_plastic is not None and accum_plastic.shape == (nx, ny, nz):
+        extra_scalars.append("accum_plastic")
     if plastic_vec is not None and plastic_vec.shape == (nx, ny, nz, 3):
         extra_scalars.extend(["plastic_xx", "plastic_yy", "plastic_zz"])
     stress_scalars = []
@@ -122,6 +125,8 @@ def write_lammpstrj(
                     ]
                     if plastic_inst is not None and plastic_inst.shape == (nx, ny, nz):
                         values.append(plastic_inst[i, j, k])
+                    if accum_plastic is not None and accum_plastic.shape == (nx, ny, nz):
+                        values.append(accum_plastic[i, j, k])
                     if plastic_vec is not None and plastic_vec.shape == (nx, ny, nz, 3):
                         px, py, pz = plastic_vec[i, j, k]
                         values.extend([px, py, pz])

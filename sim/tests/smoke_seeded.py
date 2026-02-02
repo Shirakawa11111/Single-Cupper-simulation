@@ -48,7 +48,7 @@ def main() -> None:
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
     energy = FreeEnergy(copper, fracture, coupling)
 
-    mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation)
+    mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation, fracture_k=fracture.k)
     pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
     solver_cfg = SolverConfig(dt=5e-3, crack_relax=0.01, plastic_relax=0.2, mech_plastic_weight=0.9, dir_coupling=0.8)
     solver = AlternatingSolver(coupling, energy, mechanical, pfc, solver_cfg)
@@ -66,10 +66,11 @@ def main() -> None:
     for s in range(1, steps + 1):
         eps = max_strain * s / steps
         energy_val = solver.step((eps, 0.0, 0.0))
+        plastic_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
         print(
             f"step {s}/{steps} strain={eps:.4f} "
             f"energy={energy_val:.4e} crack_mean={solver.state['crack'].mean():.4e} "
-            f"plastic_mean={solver.state['plastic'].mean():.4e}"
+            f"plastic_mean={plastic_mean:.4e}"
         )
         # per-step VTK (deformed coords)
         write_vtk(

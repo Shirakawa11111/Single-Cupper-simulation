@@ -338,6 +338,117 @@ class PFCCoupling:
         return gc_eff
 
 
+def _as_tuple(value: float | tuple[float, ...], ndim: int) -> tuple[float, ...]:
+    if isinstance(value, (int, float)):
+        return (float(value),) * ndim
+    if len(value) != ndim:
+        raise ValueError("spacing/periodic length must match crack.ndim")
+    return tuple(value)
+
+
+def crack_driving_force(
+    crack: Array,
+    toughness: Array,
+    l0: float,
+    spacing: float | tuple[float, ...] = 1.0,
+    periodic: tuple[bool, ...] | None = None,
+) -> Array:
+    """
+    Discrete crack driving force for AT2: (gc/l0) * phi - div(gc * l0 * grad phi)
+    using face-centered fluxes and zero-flux on non-periodic boundaries.
+    """
+    crack = np.asarray(crack)
+    toughness = np.asarray(toughness)
+    spacing_t = _as_tuple(spacing, crack.ndim)
+    periodic_t = _as_tuple((True,) * crack.ndim if periodic is None else periodic, crack.ndim)
+
+    out = (toughness / l0) * crack
+    for ax, dx in enumerate(spacing_t):
+        phi_f = np.roll(crack, -1, axis=ax)
+        t_f = 0.5 * (toughness + np.roll(toughness, -1, axis=ax))
+        if not periodic_t[ax]:
+            sl_last = [slice(None)] * crack.ndim
+            sl_last[ax] = -1
+            phi_f[tuple(sl_last)] = crack[tuple(sl_last)]
+            t_f[tuple(sl_last)] = toughness[tuple(sl_last)]
+        grad_f = (phi_f - crack) / dx
+        flux_f = t_f * l0 * grad_f
+        if not periodic_t[ax]:
+            sl_last = [slice(None)] * crack.ndim
+            sl_last[ax] = -1
+            flux_f[tuple(sl_last)] = 0.0
+        flux_b = np.roll(flux_f, 1, axis=ax)
+        if not periodic_t[ax]:
+            sl_first = [slice(None)] * crack.ndim
+            sl_first[ax] = 0
+            flux_b[tuple(sl_first)] = 0.0
+        out += (flux_f - flux_b) / dx
+    return out
+
+
+def crack_energy_consistent(
+    crack: Array,
+    toughness: Array,
+    l0: float,
+    spacing: float | tuple[float, ...] = 1.0,
+    periodic: tuple[bool, ...] | None = None,
+) -> float:
+    """
+    Discrete crack energy using the same flux discretization as crack_driving_force.
+    Returns the total energy (summed over the grid).
+    """
+    crack = np.asarray(crack)
+    toughness = np.asarray(toughness)
+    spacing_t = _as_tuple(spacing, crack.ndim)
+    periodic_t = _as_tuple((True,) * crack.ndim if periodic is None else periodic, crack.ndim)
+
+    bulk = 0.5 * (toughness / l0) * crack * crack
+    grad_term = np.zeros_like(crack, dtype=float)
+    for ax, dx in enumerate(spacing_t):
+        phi_f = np.roll(crack, -1, axis=ax)
+        t_f = 0.5 * (toughness + np.roll(toughness, -1, axis=ax))
+        if not periodic_t[ax]:
+            sl_last = [slice(None)] * crack.ndim
+            sl_last[ax] = -1
+            phi_f[tuple(sl_last)] = crack[tuple(sl_last)]
+            t_f[tuple(sl_last)] = toughness[tuple(sl_last)]
+        grad_f = (phi_f - crack) / dx
+        grad_term += 0.5 * t_f * l0 * grad_f * grad_f
+    return float(np.sum(bulk + grad_term))
+
+
+def diagnose_crack_energy_consistency(
+    crack: Array,
+    toughness: Array,
+    l0: float,
+    spacing: float | tuple[float, ...] = 1.0,
+    periodic: tuple[bool, ...] | None = None,
+    eps: float = 1e-7,
+    seed: int = 0,
+) -> dict[str, float]:
+    """
+    One-off diagnostic: compare finite-difference energy derivative with the
+    inner product of the discrete driving force.
+    """
+    rng = np.random.default_rng(seed)
+    direction = rng.standard_normal(crack.shape)
+    direction = direction / (np.linalg.norm(direction) + 1e-12)
+
+    e0 = crack_energy_consistent(crack, toughness, l0, spacing=spacing, periodic=periodic)
+    e1 = crack_energy_consistent(crack + eps * direction, toughness, l0, spacing=spacing, periodic=periodic)
+    fd = (e1 - e0) / eps
+    drive = crack_driving_force(crack, toughness, l0, spacing=spacing, periodic=periodic)
+    inner = float(np.sum(drive * direction))
+    abs_err = float(abs(fd - inner))
+    rel_err = float(abs_err / (abs(fd) + abs(inner) + 1e-12))
+    return {
+        "fd": float(fd),
+        "inner": inner,
+        "abs_err": abs_err,
+        "rel_err": rel_err,
+    }
+
+
 class FreeEnergy:
     """
     Full free-energy functional evaluator with PFC coupling.
@@ -425,5 +536,8 @@ __all__ = [
     "Constraint",
     "VolumeConstraint",
     "PFCCoupling",
+    "crack_driving_force",
+    "crack_energy_consistent",
+    "diagnose_crack_energy_consistency",
     "FreeEnergy",
 ]

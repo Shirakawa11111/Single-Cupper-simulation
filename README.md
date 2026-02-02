@@ -24,7 +24,7 @@ python -m sim.tests.virtual_cycle \
 ```
 输出：
 - VTK：`sim/tests/virtual_cycle_vtk/anim_frame_*.vtk`（二进制，STRUCTURED_GRID，含 crack/plastic/psi/stress/displacement 等及归一化字段）。
-- LAMMPS dump：`sim/tests/virtual_cycle_*.lammpstrj`（包含 crack, plastic, psi, plastic_vec 分量, stress_vm, stress_xx/yy/zz）。
+- LAMMPS dump：`sim/tests/virtual_cycle_*.lammpstrj`（包含 crack, plastic, plastic_inst, accum_plastic, psi, plastic_vec 分量, stress_vm, stress_xx/yy/zz）。
 - CSV：`sim/tests/virtual_cycle.csv`（cycle, energy, crack_mean, plastic_mean, crack_delta, plastic_range）。
 
 可视化提示：
@@ -57,6 +57,7 @@ python -m sim.tests.virtual_cycle \
 - 疲劳主脚本 `sim/tests/virtual_cycle.py` 增强：支持缺陷播种输入、缺口种子（notch_box）、预演化步（pre_relax）让缺陷/滑移带先成形；宏观应变包含泊松收缩 (ε, -ν ε, -ν ε)；可选应力耦合到 PFC (`stress_mu_weight`)；韧性缩放 `toughness_scale` 便于促开裂/稳健性调参；逐步 VTK/LAMMPS 输出使用一致的宏观应变。
 - 塑性/力学更新：`plastic_measures` 采用 FCC 正交滑移系 RSS（含符号）和屈服阈值/流动尺度，累积等效塑性（用于韧性退化）与塑性张量（本征应变）。力学求解与能量使用 $(\varepsilon - \varepsilon^p)$；支持晶界弱化 mask。输出可选应力–应变曲线 CSV（`stress_strain_csv`）。
 - 输出宏观应力应变：`virtual_cycle.py` 可选写出逐步的平均应力-应变曲线（含 von Mises）到 CSV（`stress_strain_csv`），便于快速绘制。
+- 诊断：`sim/energy.py` 增加裂纹驱动力/能量一致性的一次性诊断接口（`diagnose_crack_energy_consistency`）。
 
 ## 回归测试（自动化）
 新增三类回归脚本，用于验证边界处理与裂纹驱动力：
@@ -70,6 +71,11 @@ python -m sim.tests.virtual_cycle \
 python sim/tests/regress_bc_crack.py
 python sim/tests/regress_bc_crack_large.py
 python sim/tests/regress_bc_crack_micron.py
+```
+
+### 统一入口（推荐）
+```bash
+python sim/tests/regress_all.py --strict --log-dir /tmp/regress_logs --output /tmp/regress_all.json
 ```
 
 ### 严格阈值 + JSON 输出
