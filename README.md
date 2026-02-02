@@ -31,6 +31,29 @@ python -m sim.tests.virtual_cycle \
 可视化提示：
 - ParaView/Ovito 固定色标，禁用 per-timestep rescale。裂纹用 `crack_clamp03` (0–0.3) 或 `crack_norm` (0–1)；塑性/应力用 0–1；位移查看 `displacement_total`/`disp_total_norm` 或 warp by total displacement。
 
+## COMSOL 训练/标定（可选）
+本项目的力学、塑性与裂纹部分是自定义求解器，可用 COMSOL 作为“高保真参考”来做参数标定或对齐训练。推荐流程：
+
+1) **用 COMSOL 生成参考数据**  
+   - 单调/循环加载下的 **σ–ε 曲线**（平均应力、von Mises）  
+   - **裂纹增长速率 / J-积分 / 能量释放率**  
+   - 指定几何与边界条件下的 **应力/应变/位移场**（场数据导出）
+
+2) **对齐/标定到本项目参数**  
+   - `sim/energy.py`  
+     - `CopperParameters.c11/c12/c44`：弹性常数（COMSOL 材料库或实验数据）  
+     - `FractureParameters.gc/l0/epsilon_half/gres`：断裂/韧性退化参数（匹配 J-积分或裂纹增长速率）  
+   - `sim/energy.py` → `PFCCoupling`  
+     - `yield_tau/flow_scale/visco_exponent/linear_hardening/kin_c/kin_d`：塑性/硬化与背应力参数（匹配循环滞回或屈服平台）  
+   - `sim/solver.py` → `SolverConfig`  
+     - `plastic_relax/dir_coupling/stress_mu_weight`：宏观加载下的软化与方向性耦合强度  
+
+3) **接口实现（COMSOL Bridge）**  
+   - 见 `comsol_bridge/README.md`：在 Windows 端启动桥接服务（连接 COMSOL Server），本地 Python 调接口提交任务、取回结果。  
+   - 模型建议预先配置好 Export 节点（表格/曲线/场），任务只负责传参、求解、导出。  
+
+> 若需要，我可以根据你已有的 COMSOL 模型/导出节点，直接生成 “参数扫描 + 结果回传 + 拟合” 的 Python 脚本模板。
+
 ## 最近更新
 - 塑性/方向场：新增 `plastic_measures`，机械 von Mises/轴向应变与 PFC 梯度按权重混合（默认机械占比 0.9），输出塑性向量。
 - 方向性裂纹驱动：加载轴塑性分量放大历史能量/驱动力（`dir_coupling` 默认 0.8）。
