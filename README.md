@@ -57,3 +57,33 @@ python -m sim.tests.virtual_cycle \
 - 疲劳主脚本 `sim/tests/virtual_cycle.py` 增强：支持缺陷播种输入、缺口种子（notch_box）、预演化步（pre_relax）让缺陷/滑移带先成形；宏观应变包含泊松收缩 (ε, -ν ε, -ν ε)；可选应力耦合到 PFC (`stress_mu_weight`)；韧性缩放 `toughness_scale` 便于促开裂/稳健性调参；逐步 VTK/LAMMPS 输出使用一致的宏观应变。
 - 塑性/力学更新：`plastic_measures` 采用 FCC 正交滑移系 RSS（含符号）和屈服阈值/流动尺度，累积等效塑性（用于韧性退化）与塑性张量（本征应变）。力学求解与能量使用 $(\varepsilon - \varepsilon^p)$；支持晶界弱化 mask。输出可选应力–应变曲线 CSV（`stress_strain_csv`）。
 - 输出宏观应力应变：`virtual_cycle.py` 可选写出逐步的平均应力-应变曲线（含 von Mises）到 CSV（`stress_strain_csv`），便于快速绘制。
+
+## 回归测试（自动化）
+新增三类回归脚本，用于验证边界处理与裂纹驱动力：
+
+- 小规模快速回归：`sim/tests/regress_bc_crack.py`
+- 大网格多周期回归：`sim/tests/regress_bc_crack_large.py`
+- 微米尺度回归：`sim/tests/regress_bc_crack_micron.py`（spacing=1e-6，gc/l0 按 spacing 缩放以保持能量比例）
+
+### 运行方式
+```bash
+python sim/tests/regress_bc_crack.py
+python sim/tests/regress_bc_crack_large.py
+python sim/tests/regress_bc_crack_micron.py
+```
+
+### 严格阈值 + JSON 输出
+```bash
+python sim/tests/regress_bc_crack.py --strict --output /tmp/regress_small.json
+python sim/tests/regress_bc_crack_large.py --strict --output /tmp/regress_large.json
+python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micron.json
+```
+
+### 输出内容
+每个脚本都会输出 JSON，包含：
+- `results`：核心指标（压缩裂纹增长、补丁残差、Mode-I 裂纹增长等）
+- `thresholds`：判定阈值
+- `timing`：每个子测试与总耗时（秒）
+- `passed` / `failures`
+
+> 说明：大网格脚本采用 **三向压缩**（避免单向压缩引入局部拉应变），Mode‑I 脚本包含多周期加载。

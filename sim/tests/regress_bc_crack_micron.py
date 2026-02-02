@@ -1,5 +1,5 @@
 """
-Larger-grid, multi-cycle regression checks for boundary handling and crack driving.
+Micron-scale regression checks (spacing set to 1e-6).
 
 Outputs a JSON report to stdout and optionally to a file.
 Exit code is non-zero on failure.
@@ -34,8 +34,7 @@ class Thresholds:
     compression_phi_growth_max: float = 1e-8
     patch_div_norm_max: float = 1e-8
     patch_stress_std_ratio_max: float = 1e-8
-    modeI_phi_mean_delta_min: float = 1e-5
-    modeI_compression_growth_max: float = 1e-5
+    modeI_phi_mean_delta_min: float = 1e-6
 
 
 @dataclass
@@ -46,7 +45,6 @@ class Results:
     modeI_phi_mean_start: float
     modeI_phi_mean_end: float
     modeI_phi_mean_delta: float
-    modeI_compression_growth_max: float
 
 
 @dataclass
@@ -63,15 +61,12 @@ def _make_orientation(grid: GridSpec) -> np.ndarray:
     return np.broadcast_to(eye, grid.shape + (3, 3)).copy()
 
 
-def _compression_test(
-    grid_shape: Tuple[int, int, int],
-    steps: int,
-    eps: float,
-) -> float:
-    grid = GridSpec(shape=grid_shape, spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
+def _test_pure_compression(spacing: Tuple[float, float, float]) -> float:
+    grid = GridSpec(shape=(16, 8, 4), spacing=spacing, periodic=(True, True, False))
     orientation = _make_orientation(grid)
     copper = CopperParameters()
-    fracture = FractureParameters()
+    scale = spacing[0]
+    fracture = FractureParameters(gc=scale, l0=scale)
     pfc_params = PFCParameters()
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
     energy = FreeEnergy(copper, fracture, coupling)
@@ -82,19 +77,18 @@ def _compression_test(
     solver.initialize_state(orientation, seed=0)
 
     crack = solver.state["crack"]
-    crack[8:12, 4:6, 2:4] = 0.6
+    crack[6:9, 3:5, 1:3] = 0.6
     solver.state["crack"] = crack
 
     phi0 = solver.state["crack"].copy()
-    for _ in range(steps):
-        # tri-axial compression to avoid accidental tensile directions
-        solver.step((eps, eps, eps))
+    for _ in range(5):
+        solver.step((-0.005, -0.005, -0.005))
     phi1 = solver.state["crack"]
     return float(np.max(phi1 - phi0))
 
 
-def _patch_test(grid_shape: Tuple[int, int, int]) -> Tuple[float, float]:
-    grid = GridSpec(shape=grid_shape, spacing=(1.0, 1.0, 1.0), periodic=(True, True, True))
+def _test_patch(spacing: Tuple[float, float, float]) -> Tuple[float, float]:
+    grid = GridSpec(shape=(12, 12, 12), spacing=spacing, periodic=(True, True, True))
     orientation = _make_orientation(grid)
     copper = CopperParameters()
     mechanical = MechanicalEquilibriumSolver(grid, copper, orientation)
@@ -110,17 +104,12 @@ def _patch_test(grid_shape: Tuple[int, int, int]) -> Tuple[float, float]:
     return div_norm, ratio
 
 
-def _modeI_cyclic(
-    grid_shape: Tuple[int, int, int],
-    cycles: int,
-    seg_steps: int,
-    eps_max: float,
-    eps_min: float,
-) -> Tuple[float, float, float]:
-    grid = GridSpec(shape=grid_shape, spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
+def _test_mode_I(spacing: Tuple[float, float, float]) -> Tuple[float, float]:
+    grid = GridSpec(shape=(24, 12, 4), spacing=spacing, periodic=(True, True, False))
     orientation = _make_orientation(grid)
     copper = CopperParameters()
-    fracture = FractureParameters(gc=0.6, l0=1.0, k=1e-6, epsilon_half=0.15, gres=0.1)
+    scale = spacing[0]
+    fracture = FractureParameters(gc=scale, l0=scale, k=1e-6, epsilon_half=0.15, gres=0.1)
     pfc_params = PFCParameters()
     coupling = PFCCoupling(pfc_params, fracture, mode="density")
     energy = FreeEnergy(copper, fracture, coupling)
@@ -131,46 +120,28 @@ def _modeI_cyclic(
     solver.initialize_state(orientation, seed=0)
 
     crack = solver.state["crack"]
-    crack[5:8, 7:9, 2:5] = 0.7
+    crack[3:6, 5:7, 1:3] = 0.7
     solver.state["crack"] = crack
 
-    phi_mean_start = float(np.mean(crack))
-    phi_prev = phi_mean_start
-    comp_growth_max = 0.0
-
-    segments = [eps_max, 0.0, eps_min, 0.0]
-    current = 0.0
-
-    for _ in range(cycles):
-        for target in segments:
-            start = current
-            for step in range(1, seg_steps + 1):
-                alpha = step / seg_steps
-                current = start + (target - start) * alpha
-                macro = (current, 0.0, 0.0)
-                solver.step(macro)
-                phi_now = float(np.mean(solver.state["crack"]))
-                if current < 0.0:
-                    comp_growth_max = max(comp_growth_max, phi_now - phi_prev)
-                phi_prev = phi_now
-
-    phi_mean_end = float(np.mean(solver.state["crack"]))
-    return phi_mean_start, phi_mean_end, comp_growth_max
+    phi0 = float(np.mean(crack))
+    for _ in range(8):
+        solver.step((0.006, 0.0, 0.0))
+    phi1 = float(np.mean(solver.state["crack"]))
+    return phi0, phi1
 
 
 def run(thr: Thresholds) -> Report:
+    spacing = (1e-6, 1e-6, 1e-6)
     timings: Dict[str, float] = {}
     t0 = perf_counter()
     t = perf_counter()
-    comp_growth = _compression_test(grid_shape=(24, 12, 6), steps=5, eps=-0.005)
+    comp_growth = _test_pure_compression(spacing)
     timings["compression_s"] = perf_counter() - t
     t = perf_counter()
-    div_norm, ratio = _patch_test(grid_shape=(20, 20, 20))
+    div_norm, ratio = _test_patch(spacing)
     timings["patch_s"] = perf_counter() - t
     t = perf_counter()
-    phi0, phi1, comp_max = _modeI_cyclic(
-        grid_shape=(32, 16, 8), cycles=2, seg_steps=5, eps_max=0.006, eps_min=-0.003
-    )
+    phi0, phi1 = _test_mode_I(spacing)
     timings["modeI_s"] = perf_counter() - t
     timings["total_s"] = perf_counter() - t0
     delta = phi1 - phi0
@@ -183,9 +154,7 @@ def run(thr: Thresholds) -> Report:
     if ratio > thr.patch_stress_std_ratio_max:
         failures["patch_stress"] = f"stress_std_ratio {ratio:.3e} > {thr.patch_stress_std_ratio_max:.3e}"
     if delta < thr.modeI_phi_mean_delta_min:
-        failures["modeI_delta"] = f"phi_mean_delta {delta:.3e} < {thr.modeI_phi_mean_delta_min:.3e}"
-    if comp_max > thr.modeI_compression_growth_max:
-        failures["modeI_comp"] = f"compression_phi_growth {comp_max:.3e} > {thr.modeI_compression_growth_max:.3e}"
+        failures["modeI"] = f"phi_mean_delta {delta:.3e} < {thr.modeI_phi_mean_delta_min:.3e}"
 
     report = Report(
         results=Results(
@@ -195,7 +164,6 @@ def run(thr: Thresholds) -> Report:
             modeI_phi_mean_start=phi0,
             modeI_phi_mean_end=phi1,
             modeI_phi_mean_delta=delta,
-            modeI_compression_growth_max=comp_max,
         ),
         thresholds=thr,
         timing=timings,
@@ -213,16 +181,14 @@ def main() -> int:
     parser.add_argument("--patch-div-max", type=float, default=Thresholds.patch_div_norm_max)
     parser.add_argument("--patch-std-ratio-max", type=float, default=Thresholds.patch_stress_std_ratio_max)
     parser.add_argument("--modeI-delta-min", type=float, default=Thresholds.modeI_phi_mean_delta_min)
-    parser.add_argument("--modeI-comp-max", type=float, default=Thresholds.modeI_compression_growth_max)
     args = parser.parse_args()
 
     if args.strict:
         thr = Thresholds(
-            compression_phi_growth_max=min(args.compression_max, 1e-9),
-            patch_div_norm_max=min(args.patch_div_max, 1e-9),
-            patch_stress_std_ratio_max=min(args.patch_std_ratio_max, 1e-9),
-            modeI_phi_mean_delta_min=max(args.modeI_delta_min, 5e-5),
-            modeI_compression_growth_max=min(args.modeI_comp_max, 1e-6),
+            compression_phi_growth_max=min(args.compression_max, 1e-10),
+            patch_div_norm_max=min(args.patch_div_max, 1e-10),
+            patch_stress_std_ratio_max=min(args.patch_std_ratio_max, 1e-10),
+            modeI_phi_mean_delta_min=max(args.modeI_delta_min, 1e-5),
         )
     else:
         thr = Thresholds(
@@ -230,8 +196,8 @@ def main() -> int:
             patch_div_norm_max=args.patch_div_max,
             patch_stress_std_ratio_max=args.patch_std_ratio_max,
             modeI_phi_mean_delta_min=args.modeI_delta_min,
-            modeI_compression_growth_max=args.modeI_comp_max,
         )
+
     report = run(thr)
 
     payload = {
