@@ -21,7 +21,7 @@ class SolverConfig:
     # Plastic relaxation per step (nd). Combine with PFCCoupling.flow_scale to match σ–ε softening rate.
     plastic_relax: float = 0.12
     # Under-relaxation for crack solve (0 freezes crack, 1 full update)
-    crack_relax: float = 1.0
+    crack_relax: float = 1.0  # set 0.0 to freeze crack if needed
     crack_eta: float = 0.0  # viscous regularization η_φ
     crack_tol: float = 1e-6
     crack_max_iters: int = 400
