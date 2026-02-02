@@ -7,6 +7,7 @@ Usage:
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -59,7 +60,9 @@ def main() -> None:
 
     steps = 5
     max_strain = 0.02
-    out_dir = Path("sim/tests/seeded_cu_smoke")
+    date_str = date.today().isoformat()
+    time_str = datetime.now().strftime("%H%M%S")
+    out_dir = Path("sim/tests/runs") / date_str / f"seeded_cu_smoke_{time_str}"
     out_dir.mkdir(parents=True, exist_ok=True)
     lammpstrj_path = out_dir / "seeded_cu_smoke.lammpstrj"
 

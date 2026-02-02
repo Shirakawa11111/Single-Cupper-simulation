@@ -84,6 +84,12 @@ python sim/tests/regress_all.py --strict --task boundary_crack
 默认日志位置（自动生成）：`sim/tests/regress_runs/YYYY-MM-DD/<task>/`  
 其中包含：`summary.json` 与每个子测试的 `*.json`/`*.stdout`/`*.stderr`。
 
+### 其他测试输出目录（统一命名）
+除回归外，其他测试输出默认写入：`sim/tests/runs/YYYY-MM-DD/<task>_<HHMMSS>/`  
+例如：
+- `virtual_cycle`：`sim/tests/runs/2026-02-02/virtual_cycle_153012/`
+- `seeded_cu_smoke`：`sim/tests/runs/2026-02-02/seeded_cu_smoke_153745/`
+
 ### 严格阈值 + JSON 输出
 ```bash
 python sim/tests/regress_bc_crack.py --strict --output /tmp/regress_small.json
@@ -100,3 +106,22 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
  - `split_compare`：谱分裂 vs 体积-偏差分裂的 Mode-I/压缩对比
 
 > 说明：大网格脚本采用 **三向压缩**（避免单向压缩引入局部拉应变），Mode‑I 脚本包含多周期加载。
+
+### 验证记录（2026-02-02）
+- 回归（strict）：`python sim/tests/regress_all.py --strict --log-dir sim/tests/regress_runs/2026-02-02/boundary_crack`  
+  结果：small/large/micron 全通过，谱分裂优于体积‑偏差分裂。日志：`sim/tests/regress_runs/2026-02-02/boundary_crack/summary.json`  
+- 多物理快速检查（单调拉伸，1 周期，10 步/段，max_strain=0.01）：  
+  `crack_mean=0`, `crack_length=0`, `accum_plastic_mean=2.895e-04`, `plastic_range=1.710e-02`, `rss_peak_nd=4.751e-03`  
+  注：1 周期下 Coffin–Manson 拟合为弱约束（polyfit 提示条件数不足）。
+- 多物理循环检查（2 周期，15 步/段，max_strain=0.02）：  
+  结果：`crack_mean=0`, `crack_length=0`, `accum_plastic_mean=3.634e-03`, `plastic_range=1.877e-03`, `rss_peak_nd=9.980e-03`  
+  输出：`sim/tests/virtual_cycle_long.csv`, `sim/tests/virtual_cycle_long_analysis.csv`, `sim/tests/virtual_cycle_long_stress_strain.csv`,  
+  应力–应变曲线图：`sim/tests/virtual_cycle_long_stress_strain.png`  
+  曲线指标：`sig_xx_GPa` ∈ [−3.149, 3.063]，`sig_vm_GPa(max)=4.476`，小应变等效模量 `E_eff≈153.16 GPa`（|ε|≤0.002 线性拟合）
+- 多物理循环检查（10 周期，100 步/段，max_strain=0.02）：  
+  结果：`crack_mean=0`, `crack_length=0`, `accum_plastic_mean=1.216e-01`, `plastic_range=3.676e-03`, `rss_peak_nd=9.519e-03`  
+  输出：`sim/tests/runs/2026-02-02/virtual_cycle_10c_100s_212301/virtual_cycle.csv`,  
+  标准疲劳指标：`sim/tests/runs/2026-02-02/virtual_cycle_10c_100s_212301/virtual_cycle_analysis.csv`，  
+  应力–应变曲线图：`sim/tests/runs/2026-02-02/virtual_cycle_10c_100s_212301/virtual_cycle_stress_strain.png`  
+  曲线指标：`sig_xx_GPa` ∈ [−3.237, 3.049]，`sig_vm_GPa(max)=4.594`，小应变等效模量 `E_eff≈135.99 GPa`（|ε|≤0.002 线性拟合）  
+  注：裂纹长度未增长，Paris/Coffin–Manson 拟合为弱约束（da/dN≈0）。

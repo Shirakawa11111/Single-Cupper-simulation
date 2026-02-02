@@ -12,6 +12,7 @@ Updates:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import List, Tuple
 
@@ -30,6 +31,23 @@ from ..structure import Cu111StructureBuilder
 def nondim_stress_to_gpa(stress_nd: np.ndarray, c11_GPa: float = 168.4) -> np.ndarray:
     """Convert nondimensional stress (σ* = σ/168.4 GPa) back to GPa."""
     return stress_nd * c11_GPa
+
+
+def _sanitize_task(name: str) -> str:
+    safe = []
+    for ch in name.strip():
+        if ch.isalnum() or ch in ("-", "_"):
+            safe.append(ch)
+        else:
+            safe.append("_")
+    return "".join(safe) or "virtual_cycle"
+
+
+def _default_run_dir(task: str) -> Path:
+    date_str = date.today().isoformat()
+    time_str = datetime.now().strftime("%H%M%S")
+    safe_task = _sanitize_task(task)
+    return Path("sim/tests/runs") / date_str / f"{safe_task}_{time_str}"
 
 
 @dataclass
@@ -72,9 +90,32 @@ def run_virtual_cycles(
     crack_length_threshold: float = 0.95,   # 裂纹长度阈值
     crack_length_x0: float | None = None,   # 裂纹尖端参考点（None=自动）
     crack_length_axis: int = 0,             # 裂纹长度统计轴
+    run_dir: Path | None = None,            # 输出根目录（默认按日期/任务自动生成）
+    task: str = "virtual_cycle",            # 任务标签（用于命名输出目录）
+    auto_output: bool = False,              # 若 True 且 run_dir 提供/默认，则自动填充输出文件
 ) -> Tuple[List[CycleResult], float, float]:
     
-    # 1. 初始化
+    # 1. 输出目录解析
+    if run_dir is None and auto_output:
+        run_dir = _default_run_dir(task)
+    if run_dir is not None and auto_output:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if csv_output is None:
+            csv_output = run_dir / "virtual_cycle.csv"
+        if analysis_csv is None:
+            analysis_csv = run_dir / "virtual_cycle_analysis.csv"
+        if stress_strain_csv is None:
+            stress_strain_csv = run_dir / "virtual_cycle_stress_strain.csv"
+        if vtk_dir is None:
+            vtk_dir = run_dir / "vtk"
+        if dump_dir is None:
+            dump_dir = run_dir / "lammpstrj"
+        if data_output is None:
+            data_output = run_dir / "virtual_cycle.data"
+        if initial_vtk is None and vtk_dir is not None:
+            initial_vtk = vtk_dir / "initial_seeded.vtk"
+
+    # 2. 初始化
     # 【关键】无量纲设置：Spacing=1.0，stress* = stress_phys / 168.4 GPa (Cu c11)
     grid = GridSpec(shape=(128, 64, 16), spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
     
@@ -424,18 +465,13 @@ def run_amplitude_sweep(
 
 if __name__ == "__main__":
     run_virtual_cycles(
-        csv_output=Path("sim/tests/virtual_cycle.csv"),
-        analysis_csv=Path("sim/tests/virtual_cycle_analysis.csv"),
-        data_output=Path("sim/tests/virtual_cycle.data"),
-        dump_dir=Path("sim/tests/virtual_cycle_lammpstrj"),
-        vtk_dir=Path("sim/tests/virtual_cycle_vtk"),
         cycles=1,
         max_strain=0.02,
         segment_steps=100,
         defect_config=None,
-        initial_vtk=Path("sim/tests/virtual_cycle_vtk/initial_seeded.vtk"),
         pre_relax_steps=0,
         pre_relax_strain=0.0,
-        stress_strain_csv=Path("sim/tests/virtual_cycle_stress_strain.csv"),
         toughness_scale=0.1,
+        task="virtual_cycle",
+        auto_output=True,
     )
