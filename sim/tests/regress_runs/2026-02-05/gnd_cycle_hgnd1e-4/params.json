@@ -1,0 +1,36 @@
+{
+  "script": "regress_gnd_cycle",
+  "args": {
+    "output": "sim/tests/regress_runs/2026-02-05/gnd_cycle_hgnd1e-4/summary.json",
+    "cycles": 5,
+    "max_strain": 0.005,
+    "segment_steps": 20,
+    "dt": 0.005,
+    "gamma0": 0.01,
+    "slip_exponent": 8.0,
+    "h_iso": 0.0004,
+    "h_gnd": 0.0001,
+    "plastic_relax": 0.2,
+    "pfc_active": false,
+    "gnd_growth_min": 1e-05,
+    "accum_growth_min": 5e-05,
+    "slope_min": 0.0
+  },
+  "grid": {
+    "shape": [
+      16,
+      8,
+      4
+    ],
+    "spacing": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "periodic": [
+      true,
+      true,
+      false
+    ]
+  }
+}
