@@ -56,6 +56,8 @@ class CycleResult:
     load: float
     crack_mean: float
     accum_plastic_mean: float
+    gnd_mean: float = 0.0
+    gnd_max: float = 0.0
     crack_length: float = 0.0
     plastic_range: float = 0.0
     rss_peak_nd: float = 0.0
@@ -386,6 +388,9 @@ def run_virtual_cycles(
 
         crack_mean = solver.state["crack"].mean()
         accum_plastic_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
+        gnd = solver.state.get("gnd_density")
+        gnd_mean = float(np.mean(gnd)) if gnd is not None else 0.0
+        gnd_max = float(np.max(gnd)) if gnd is not None else 0.0
         crack_len = crack_length(
             solver.state["crack"],
             grid,
@@ -400,6 +405,8 @@ def run_virtual_cycles(
                 load=energy_val,
                 crack_mean=crack_mean,
                 accum_plastic_mean=accum_plastic_mean,
+                gnd_mean=gnd_mean,
+                gnd_max=gnd_max,
                 crack_length=crack_len,
                 plastic_range=plastic_range,
                 rss_peak_nd=cycle_rss_peak,
@@ -466,11 +473,15 @@ def run_virtual_cycles(
         if csv_output:
             csv_output.parent.mkdir(parents=True, exist_ok=True)
             with csv_output.open("w", encoding="utf-8") as fh:
-                fh.write("cycle,energy,crack_mean,accum_plastic_mean,crack_length,crack_delta,plastic_range\n")
+                fh.write(
+                    "cycle,energy,crack_mean,accum_plastic_mean,gnd_mean,gnd_max,"
+                    "crack_length,crack_delta,plastic_range\n"
+                )
                 for r, pd, pr in zip(results, crack_deltas, plastic_ranges):
                     fh.write(
                         f"{r.cycle},{r.load:.6e},{r.crack_mean:.6e},"
-                        f"{r.accum_plastic_mean:.6e},{r.crack_length:.6e},{pd:.6e},{pr:.6e}\n"
+                        f"{r.accum_plastic_mean:.6e},{r.gnd_mean:.6e},{r.gnd_max:.6e},"
+                        f"{r.crack_length:.6e},{pd:.6e},{pr:.6e}\n"
                     )
         if analysis_csv:
             analysis_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -484,9 +495,17 @@ def run_virtual_cycles(
             eps_p_half = 0.5 * np.array([r.plastic_range for r in results], dtype=float)
             rss_peak = np.array([r.rss_peak_nd for r in results], dtype=float)
             with analysis_csv.open("w", encoding="utf-8") as fh:
-                fh.write("cycle,a,da_dN,eps_p_half,rss_peak_nd\n")
-                for c, a, dadn, eph, rp in zip(cycles_out, a_arr, da, eps_p_half, rss_peak):
-                    fh.write(f"{int(c)},{a:.6e},{dadn:.6e},{eph:.6e},{rp:.6e}\n")
+                fh.write("cycle,a,da_dN,eps_p_half,rss_peak_nd,gnd_mean,gnd_max\n")
+                for c, a, dadn, eph, rp, gm, gx in zip(
+                    cycles_out,
+                    a_arr,
+                    da,
+                    eps_p_half,
+                    rss_peak,
+                    [r.gnd_mean for r in results],
+                    [r.gnd_max for r in results],
+                ):
+                    fh.write(f"{int(c)},{a:.6e},{dadn:.6e},{eph:.6e},{rp:.6e},{gm:.6e},{gx:.6e}\n")
         if stress_strain_csv and stress_strain_log:
             stress_strain_csv.parent.mkdir(parents=True, exist_ok=True)
             with stress_strain_csv.open("w", encoding="utf-8") as fh:

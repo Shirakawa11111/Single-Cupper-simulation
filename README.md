@@ -13,6 +13,8 @@
 - `sim/tests/regress_microstrain.py`：微应变线弹性回归（σ–ε 比值与塑性漂移）。
 - `sim/tests/regress_gnd.py`：GND/Nye 回归（滑移梯度驱动下 ρ_GND 线性响应检查）。
 - `sim/tests/regress_gnd_cycle.py`：低幅循环 GND 增长回归（输出 gnd_density_mean/Σ|γ_s| 趋势与参数快照）。
+- `sim/tests/plot_gnd_cycle.py`：gnd_cycle.csv 基线可视化（GND mean 与 accum_plastic 同图）。
+- `sim/tests/scan_gnd_orientations.py`：扫描晶向对 GND 分布/统计的敏感性。
 - `report.tex`：项目报告/公式/流程/输出说明（XeLaTeX + ctex）。
 
 ## 运行示例
@@ -169,4 +171,5 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   边界裂纹（large）：`sim/tests/regress_runs/2026-02-05/bc_crack_large/summary.json`（passed）  
   边界裂纹（micron）：`sim/tests/regress_runs/2026-02-05/bc_crack_micron/summary.json`（passed）  
   GND/Nye：`sim/tests/regress_runs/2026-02-05/gnd/summary.json`（passed）  
-  低幅循环 GND：`sim/tests/regress_runs/2026-02-05/gnd_cycle/summary.json`（passed）
+  低幅循环 GND：`sim/tests/regress_runs/2026-02-05/gnd_cycle/summary.json`（passed）  
+  基线图：`sim/tests/regress_runs/2026-02-05/gnd_cycle/gnd_cycle_baseline.png`
