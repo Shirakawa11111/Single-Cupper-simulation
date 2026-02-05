@@ -1,0 +1,55 @@
+{
+  "script": "scan_gnd_orientations",
+  "args": {
+    "orientations": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0,
+        1.0
+      ],
+      [
+        1.0,
+        1.0,
+        2.0
+      ]
+    ],
+    "cycles": 1,
+    "max_strain": 0.005,
+    "cycle_points": 40,
+    "grid_shape": [
+      32,
+      16,
+      8
+    ],
+    "grid_spacing": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "pfc_active": false,
+    "notch_box": [
+      [
+        11.2,
+        14.4
+      ],
+      [
+        7.2,
+        8.8
+      ],
+      [
+        2.8,
+        5.2
+      ]
+    ]
+  }
+}

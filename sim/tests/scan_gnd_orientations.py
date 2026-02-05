@@ -39,7 +39,11 @@ def main() -> None:
     parser.add_argument("--cycles", type=int, default=3, help="Cycles per orientation.")
     parser.add_argument("--max-strain", type=float, default=0.005, help="Max strain amplitude.")
     parser.add_argument("--cycle-points", type=int, default=80, help="Points per cycle.")
+    parser.add_argument("--grid-shape", type=str, default="32,16,8", help="Grid shape Nx,Ny,Nz.")
+    parser.add_argument("--grid-spacing", type=str, default="1,1,1", help="Grid spacing dx,dy,dz.")
     parser.add_argument("--pfc-active", action="store_true", help="Enable PFC evolution.")
+    parser.add_argument("--notch", action="store_true", help="Seed a default notch to induce gradients.")
+    parser.add_argument("--notch-box", type=str, default="", help="Custom notch box x0,x1,y0,y1,z0,z1")
     parser.add_argument("--tag", type=str, default="gnd_orient_scan", help="Tag for output directory.")
     args = parser.parse_args()
 
@@ -49,6 +53,30 @@ def main() -> None:
     root = args.output_root or Path("sim/tests/runs") / date_str / f"{args.tag}_{time_str}"
     root.mkdir(parents=True, exist_ok=True)
 
+    shape_vals = [int(v.strip()) for v in args.grid_shape.split(",") if v.strip()]
+    if len(shape_vals) != 3:
+        raise ValueError("grid_shape must have 3 comma-separated ints")
+    spacing_vals = [float(v.strip()) for v in args.grid_spacing.split(",") if v.strip()]
+    if len(spacing_vals) != 3:
+        raise ValueError("grid_spacing must have 3 comma-separated floats")
+    grid_shape = tuple(shape_vals)
+    grid_spacing = tuple(spacing_vals)
+
+    notch_box = None
+    if args.notch_box:
+        vals = [float(v.strip()) for v in args.notch_box.split(",") if v.strip()]
+        if len(vals) != 6:
+            raise ValueError("notch_box must have 6 comma-separated values")
+        notch_box = ((vals[0], vals[1]), (vals[2], vals[3]), (vals[4], vals[5]))
+    elif args.notch:
+        nx, ny, nz = grid_shape
+        dx, dy, dz = grid_spacing
+        notch_box = (
+            (0.35 * nx * dx, 0.45 * nx * dx),
+            (0.45 * ny * dy, 0.55 * ny * dy),
+            (0.35 * nz * dz, 0.65 * nz * dz),
+        )
+
     params = {
         "script": "scan_gnd_orientations",
         "args": {
@@ -56,7 +84,10 @@ def main() -> None:
             "cycles": args.cycles,
             "max_strain": args.max_strain,
             "cycle_points": args.cycle_points,
+            "grid_shape": grid_shape,
+            "grid_spacing": grid_spacing,
             "pfc_active": args.pfc_active,
+            "notch_box": notch_box,
         },
     }
     (root / "params.json").write_text(json.dumps(params, indent=2), encoding="utf-8")
@@ -70,8 +101,11 @@ def main() -> None:
             max_strain=args.max_strain,
             cycle_points=args.cycle_points,
             orientation_vector=ori,
+            grid_shape=grid_shape,
+            grid_spacing=grid_spacing,
             gnd_active=True,
             pfc_active=args.pfc_active,
+            notch_box=notch_box,
             stable_window=None,
             csv_output=run_dir / "virtual_cycle.csv",
             analysis_csv=run_dir / "virtual_cycle_analysis.csv",

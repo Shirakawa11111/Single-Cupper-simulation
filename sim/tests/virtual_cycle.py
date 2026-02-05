@@ -94,6 +94,9 @@ def run_virtual_cycles(
     crack_length_axis: int = 0,             # 裂纹长度统计轴
     cycle_points: int | None = None,        # 每个完整循环的离散点数（覆盖 segment_steps）
     orientation_vector: tuple[float, float, float] = (1.0, 1.0, 1.0),  # 单晶取向，默认 [111]
+    grid_shape: tuple[int, int, int] | None = None,
+    grid_spacing: tuple[float, float, float] | None = None,
+    grid_periodic: tuple[bool, bool, bool] | None = None,
     stable_window: int | None = None,       # 稳定判据：最近 N 个周期
     stable_tol: float = 0.02,               # 稳定判据：相对变化阈值
     stable_metrics: tuple[str, ...] = ("plastic_range", "rss_peak_nd"),
@@ -140,7 +143,10 @@ def run_virtual_cycles(
 
     # 2. 初始化
     # 【关键】无量纲设置：Spacing=1.0，stress* = stress_phys / 168.4 GPa (Cu c11)
-    grid = GridSpec(shape=(128, 64, 16), spacing=(1.0, 1.0, 1.0), periodic=(True, True, False))
+    shape = grid_shape or (128, 64, 16)
+    spacing = grid_spacing or (1.0, 1.0, 1.0)
+    periodic = grid_periodic or (True, True, False)
+    grid = GridSpec(shape=shape, spacing=spacing, periodic=periodic)
     
     copper = CopperParameters()
     base_fracture = FractureParameters()

@@ -173,3 +173,6 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   GND/Nye：`sim/tests/regress_runs/2026-02-05/gnd/summary.json`（passed）  
   低幅循环 GND：`sim/tests/regress_runs/2026-02-05/gnd_cycle/summary.json`（passed）  
   基线图：`sim/tests/regress_runs/2026-02-05/gnd_cycle/gnd_cycle_baseline.png`
+- 晶向扫描（低幅循环 + notch，小网格）：  
+  输出根目录：`sim/tests/runs/2026-02-05/gnd_orient_scan_lowamp_notch_small_180348/`  
+  方向：`[100]`, `[110]`, `[111]`, `[112]`；summary.json 含 gnd_mean/gnd_max/accum_plastic。
