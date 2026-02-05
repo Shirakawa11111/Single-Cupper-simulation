@@ -232,6 +232,15 @@ def main() -> int:
             modeI_phi_mean_delta_min=args.modeI_delta_min,
             modeI_compression_growth_max=args.modeI_comp_max,
         )
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        params = {
+            "script": "regress_bc_crack_large",
+            "args": vars(args),
+            "thresholds": asdict(thr),
+        }
+        (output_path.parent / "params.json").write_text(json.dumps(params, indent=2), encoding="utf-8")
     report = run(thr)
 
     payload = {

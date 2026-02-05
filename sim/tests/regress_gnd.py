@@ -103,6 +103,19 @@ def main() -> None:
         ratio_tol=args.ratio_tol,
     )
     failures: Dict[str, str] = {}
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args_dict = {
+            key: (str(val) if isinstance(val, Path) else val)
+            for key, val in vars(args).items()
+        }
+        params = {
+            "script": "regress_gnd",
+            "args": args_dict,
+            "grid": {"shape": [16, 8, 4], "spacing": [1.0, 1.0, 1.0], "periodic": [False, True, True]},
+        }
+        params_path = args.output.parent / "params.json"
+        params_path.write_text(json.dumps(params, indent=2), encoding="utf-8")
     t0 = perf_counter()
     results = _test_gnd(slope=args.slope)
     t1 = perf_counter()

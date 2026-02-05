@@ -32,12 +32,16 @@ from sim.solver import AlternatingSolver, SolverConfig
 class Thresholds:
     linear_ratio_tol: float = 0.02
     accum_plastic_max: float = 1e-8
+    gnd_mean_max: float = 1e-10
+    gnd_max_max: float = 1e-9
 
 
 @dataclass
 class Results:
     stress_ratio: float
     accum_plastic_mean: float
+    gnd_density_mean: float
+    gnd_density_max: float
 
 
 @dataclass
@@ -65,7 +69,7 @@ def _test_microstrain() -> Results:
     mech_cfg = MechanicalConfig()
     mechanical = MechanicalEquilibriumSolver(grid, copper, orientation, fracture_k=fracture.k, config=mech_cfg)
     pfc = PFCEvolver(grid, pfc_params, dt=0.0, clip=1.0)
-    cfg = SolverConfig(dt=1e-3, plastic_relax=0.2, pfc_active=False)
+    cfg = SolverConfig(dt=1e-3, plastic_relax=0.2, pfc_active=False, gnd_active=True)
     solver = AlternatingSolver(coupling, energy, mechanical, pfc, cfg)
     solver.initialize_state(orientation, seed=0)
 
@@ -82,7 +86,15 @@ def _test_microstrain() -> Results:
     s2 = float(np.mean(stress2[..., 0, 0]))
     ratio = s2 / max(s1, 1e-12)
     accum_plastic = float(np.mean(solver.state.get("accum_plastic", 0.0)))
-    return Results(stress_ratio=ratio, accum_plastic_mean=accum_plastic)
+    gnd = solver.state.get("gnd_density")
+    gnd_mean = float(np.mean(gnd)) if gnd is not None else 0.0
+    gnd_max = float(np.max(gnd)) if gnd is not None else 0.0
+    return Results(
+        stress_ratio=ratio,
+        accum_plastic_mean=accum_plastic,
+        gnd_density_mean=gnd_mean,
+        gnd_density_max=gnd_max,
+    )
 
 
 def main() -> None:
@@ -90,10 +102,31 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=None, help="Optional JSON output path.")
     parser.add_argument("--linear-tol", type=float, default=0.02, help="Relative tolerance for stress ratio.")
     parser.add_argument("--plastic-max", type=float, default=1e-8, help="Max mean accumulated plastic.")
+    parser.add_argument("--gnd-mean-max", type=float, default=1e-10, help="Max mean GND density.")
+    parser.add_argument("--gnd-max-max", type=float, default=1e-9, help="Max GND density.")
     args = parser.parse_args()
 
-    thresholds = Thresholds(linear_ratio_tol=args.linear_tol, accum_plastic_max=args.plastic_max)
+    thresholds = Thresholds(
+        linear_ratio_tol=args.linear_tol,
+        accum_plastic_max=args.plastic_max,
+        gnd_mean_max=args.gnd_mean_max,
+        gnd_max_max=args.gnd_max_max,
+    )
     failures: Dict[str, str] = {}
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args_dict = {
+            key: (str(val) if isinstance(val, Path) else val)
+            for key, val in vars(args).items()
+        }
+        params = {
+            "script": "regress_microstrain",
+            "args": args_dict,
+            "config": {"dt": 1e-3, "plastic_relax": 0.2, "pfc_active": False, "gnd_active": True},
+            "grid": {"shape": [12, 8, 4], "spacing": [1.0, 1.0, 1.0], "periodic": [True, True, False]},
+        }
+        params_path = args.output.parent / "params.json"
+        params_path.write_text(json.dumps(params, indent=2), encoding="utf-8")
     t0 = perf_counter()
     results = _test_microstrain()
     t1 = perf_counter()
@@ -102,6 +135,10 @@ def main() -> None:
         failures["stress_ratio"] = f"ratio {results.stress_ratio:.6e} exceeds tolerance"
     if results.accum_plastic_mean > thresholds.accum_plastic_max:
         failures["accum_plastic"] = f"{results.accum_plastic_mean:.6e} exceeds max"
+    if results.gnd_density_mean > thresholds.gnd_mean_max:
+        failures["gnd_mean"] = f"{results.gnd_density_mean:.6e} exceeds max"
+    if results.gnd_density_max > thresholds.gnd_max_max:
+        failures["gnd_max"] = f"{results.gnd_density_max:.6e} exceeds max"
 
     report = Report(
         results=results,

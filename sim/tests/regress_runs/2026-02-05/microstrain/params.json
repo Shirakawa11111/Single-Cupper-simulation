@@ -1,0 +1,33 @@
+{
+  "script": "regress_microstrain",
+  "args": {
+    "output": "sim/tests/regress_runs/2026-02-05/microstrain/summary.json",
+    "linear_tol": 0.02,
+    "plastic_max": 1e-08,
+    "gnd_mean_max": 1e-10,
+    "gnd_max_max": 1e-09
+  },
+  "config": {
+    "dt": 0.001,
+    "plastic_relax": 0.2,
+    "pfc_active": false,
+    "gnd_active": true
+  },
+  "grid": {
+    "shape": [
+      12,
+      8,
+      4
+    ],
+    "spacing": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "periodic": [
+      true,
+      true,
+      false
+    ]
+  }
+}

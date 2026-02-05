@@ -1,0 +1,27 @@
+{
+  "script": "regress_gnd",
+  "args": {
+    "output": "sim/tests/regress_runs/2026-02-05/gnd/summary.json",
+    "slope": 0.001,
+    "uniform_max": 1e-10,
+    "gradient_min": 1e-05,
+    "ratio_tol": 0.05
+  },
+  "grid": {
+    "shape": [
+      16,
+      8,
+      4
+    ],
+    "spacing": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "periodic": [
+      false,
+      true,
+      true
+    ]
+  }
+}

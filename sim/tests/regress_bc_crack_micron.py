@@ -197,6 +197,15 @@ def main() -> int:
             patch_stress_std_ratio_max=args.patch_std_ratio_max,
             modeI_phi_mean_delta_min=args.modeI_delta_min,
         )
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        params = {
+            "script": "regress_bc_crack_micron",
+            "args": vars(args),
+            "thresholds": asdict(thr),
+        }
+        (output_path.parent / "params.json").write_text(json.dumps(params, indent=2), encoding="utf-8")
 
     report = run(thr)
 

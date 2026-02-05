@@ -11,7 +11,7 @@
     "ratio_tol": 0.05
   },
   "timing": {
-    "total_s": 0.0065102080116048455
+    "total_s": 0.006472333043348044
   },
   "passed": true,
   "failures": {}

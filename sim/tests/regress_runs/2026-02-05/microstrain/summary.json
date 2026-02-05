@@ -1,14 +1,18 @@
 {
   "results": {
     "stress_ratio": 1.9999999999921543,
-    "accum_plastic_mean": 0.0
+    "accum_plastic_mean": 0.0,
+    "gnd_density_mean": 0.0,
+    "gnd_density_max": 0.0
   },
   "thresholds": {
     "linear_ratio_tol": 0.02,
-    "accum_plastic_max": 1e-08
+    "accum_plastic_max": 1e-08,
+    "gnd_mean_max": 1e-10,
+    "gnd_max_max": 1e-09
   },
   "timing": {
-    "total_s": 0.02266608295030892
+    "total_s": 0.018050334008876234
   },
   "passed": true,
   "failures": {}
