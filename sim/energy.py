@@ -173,6 +173,7 @@ class PFCCoupling:
         backstress: Array | None = None,
         dev_only: bool = True,
         return_signed_max: bool = False,
+        orientation: Array | None = None,
     ) -> tuple[Array, Array, list[Array], list[Array], Array | None]:
         """
         Compute resolved shear stress (RSS) on FCC slip systems from a stress-like tensor.
@@ -190,14 +191,24 @@ class PFCCoupling:
         if dev_only:
             tr = np.trace(tensor_eff, axis1=-2, axis2=-1)[..., None, None] / 3.0
             tensor_eff = tensor_eff - tr * np.eye(3)
+        if orientation is not None:
+            orientation = np.asarray(orientation)
+            if orientation.shape not in ((3, 3), tensor.shape):
+                raise ValueError("orientation must be (3,3) or match tensor shape")
         rss_list: list[Array] = []
         rss_signed_list: list[Array] = []
         mn_list: list[Array] = []
         proj_signs: list[Array] = []
         for m, n in self.slip_systems:
-            mn = np.outer(m, n)
+            if orientation is None:
+                mn = np.outer(m, n)
+                proj = np.einsum("...ij,ij->...", tensor_eff, mn, optimize=True)
+            else:
+                m_lab = np.einsum("...ij,j->...i", orientation, m, optimize=True)
+                n_lab = np.einsum("...ij,j->...i", orientation, n, optimize=True)
+                mn = np.einsum("...i,...j->...ij", m_lab, n_lab, optimize=True)
+                proj = np.einsum("...ij,...ij->...", tensor_eff, mn, optimize=True)
             mn_list.append(mn)
-            proj = np.einsum("...ij,ij->...", tensor_eff, mn, optimize=True)
             rss_signed_list.append(proj)
             rss_list.append(np.abs(proj))
             proj_signs.append(np.sign(proj))
@@ -225,6 +236,7 @@ class PFCCoupling:
         backstress: Array | None = None,
         load_axis: int = 0,
         mech_weight: float = 0.7,
+        orientation: Array | None = None,
     ) -> tuple[Array, Array, Array]:
         """
         Compute scalar equivalent plastic strain, directional surrogate, and a
@@ -240,6 +252,12 @@ class PFCCoupling:
         if self.mode == "plastic" and plastic_eq is not None and plastic_vec is not None:
             epsp_tensor = np.zeros(plastic_vec.shape[:-1] + (3, 3))
             return plastic_eq, plastic_vec, epsp_tensor
+
+        orientation_local = None
+        if orientation is not None:
+            orientation_local = np.asarray(orientation)
+            if orientation_local.shape not in ((3, 3), psi.shape + (3, 3)):
+                raise ValueError("orientation must be (3,3) or match psi shape")
 
         # --- PFC-based measures ---
         grad = np.gradient(psi)
@@ -258,7 +276,7 @@ class PFCCoupling:
             # Prefer stress if provided; else use strain. RSS uses deviatoric effective tensor.
             if stress is not None:
                 rss_max, rss_stack, proj_signs, mn_list, _ = self.compute_rss(
-                    stress, backstress=backstress, dev_only=True
+                    stress, backstress=backstress, dev_only=True, orientation=orientation_local
                 )
             else:
                 # strain proxy (no deviatoric reduction)
@@ -267,9 +285,15 @@ class PFCCoupling:
                 proj_signs = []
                 tensor = strain
                 for m, n in self.slip_systems:
-                    mn = np.outer(m, n)
+                    if orientation_local is None:
+                        mn = np.outer(m, n)
+                        proj = np.einsum("...ij,ij->...", tensor, mn, optimize=True)
+                    else:
+                        m_lab = np.einsum("...ij,j->...i", orientation_local, m, optimize=True)
+                        n_lab = np.einsum("...ij,j->...i", orientation_local, n, optimize=True)
+                        mn = np.einsum("...i,...j->...ij", m_lab, n_lab, optimize=True)
+                        proj = np.einsum("...ij,...ij->...", tensor, mn, optimize=True)
                     mn_list.append(mn)
-                    proj = np.einsum("...ij,ij->...", tensor, mn, optimize=True)
                     rss_list.append(np.abs(proj))
                     proj_signs.append(np.sign(proj))
                 rss_stack = np.stack(rss_list, axis=0)
@@ -293,9 +317,20 @@ class PFCCoupling:
             for k, (m, n) in enumerate(self.slip_systems):
                 selector = (idx_max == k)
                 if np.any(selector):
-                    comp_mech[0][selector] = np.abs(m[0])
-                    comp_mech[1][selector] = np.abs(m[1])
-                    comp_mech[2][selector] = np.abs(m[2])
+                    if orientation_local is None:
+                        comp_mech[0][selector] = np.abs(m[0])
+                        comp_mech[1][selector] = np.abs(m[1])
+                        comp_mech[2][selector] = np.abs(m[2])
+                    else:
+                        m_lab = np.einsum("...ij,j->...i", orientation_local, m, optimize=True)
+                        if m_lab.shape == (3,):
+                            comp_mech[0][selector] = np.abs(m_lab[0])
+                            comp_mech[1][selector] = np.abs(m_lab[1])
+                            comp_mech[2][selector] = np.abs(m_lab[2])
+                        else:
+                            comp_mech[0][selector] = np.abs(m_lab[..., 0])[selector]
+                            comp_mech[1][selector] = np.abs(m_lab[..., 1])[selector]
+                            comp_mech[2][selector] = np.abs(m_lab[..., 2])[selector]
             # Build a plastic strain proxy tensor from the winning slip system mn
             # For simplicity, assign epsp_tensor = flow * sign(proj) * sym(m⊗n)
             epsp_tensor = np.zeros_like(strain)
@@ -303,9 +338,18 @@ class PFCCoupling:
                 selector = (idx_max == k)
                 if np.any(selector):
                     mn = mn_list[k]
-                    sym_mn = 0.5 * (mn + mn.T)
+                    if mn.ndim == 2:
+                        sym_mn = 0.5 * (mn + mn.T)
+                        sym_sel = sym_mn
+                    else:
+                        sym_mn = 0.5 * (mn + np.swapaxes(mn, -1, -2))
+                        sym_sel = sym_mn[selector]
                     sign_k = proj_signs[k]
-                    epsp_tensor[selector] = flow_scaled[selector][..., None, None] * sym_mn * sign_k[selector][..., None, None]
+                    epsp_tensor[selector] = (
+                        flow_scaled[selector][..., None, None]
+                        * sym_sel
+                        * sign_k[selector][..., None, None]
+                    )
 
         # Blend mechanical and PFC contributions for scalar/directional proxies
         eps_eq = mech_weight * eps_eq_mech + (1.0 - mech_weight) * eps_eq_pfc

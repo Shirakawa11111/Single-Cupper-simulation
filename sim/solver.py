@@ -63,6 +63,7 @@ class AlternatingSolver:
         self.state: Dict[str, Array] = {}
 
     def initialize_state(self, orientation_field: Array, seed: int = 0) -> None:
+        self.orientation = orientation_field
         psi = self.coupling.initialize_density(orientation_field.shape[:-2], seed)
         crack = np.zeros_like(psi)
         plastic_eq = np.zeros_like(psi)  # accumulated equivalent plastic strain (for toughness degradation)
@@ -117,6 +118,7 @@ class AlternatingSolver:
             backstress=backstress,
             load_axis=self.config.load_axis,
             mech_weight=self.config.mech_plastic_weight,
+            orientation=self.orientation,
         )
         epsp_increment = self.config.plastic_relax * epsp_tensor
         plastic_tensor = plastic_tensor + epsp_increment

@@ -21,7 +21,7 @@ import numpy as np
 from ..analysis import crack_growth_rate, crack_length
 from ..energy import CopperParameters, FreeEnergy, FractureParameters, PFCParameters, PFCCoupling
 from ..io import write_atomic_data, write_lammpstrj, write_vtk
-from ..mechanics import MechanicalEquilibriumSolver
+from ..mechanics import MechanicalConfig, MechanicalEquilibriumSolver
 from ..operators import GridSpec
 from ..pfc import PFCEvolver
 from ..solver import AlternatingSolver, SolverConfig
@@ -90,6 +90,20 @@ def run_virtual_cycles(
     crack_length_threshold: float = 0.95,   # 裂纹长度阈值
     crack_length_x0: float | None = None,   # 裂纹尖端参考点（None=自动）
     crack_length_axis: int = 0,             # 裂纹长度统计轴
+    cycle_points: int | None = None,        # 每个完整循环的离散点数（覆盖 segment_steps）
+    orientation_vector: tuple[float, float, float] = (1.0, 1.0, 1.0),  # 单晶取向，默认 [111]
+    stable_window: int | None = None,       # 稳定判据：最近 N 个周期
+    stable_tol: float = 0.02,               # 稳定判据：相对变化阈值
+    stable_metrics: tuple[str, ...] = ("plastic_range", "rss_peak_nd"),
+    stable_min_cycles: int | None = None,   # 最少周期后才开始判稳
+    yield_tau: float | None = None,         # 覆盖屈服阈值（nd）
+    flow_scale: float | None = None,        # 覆盖流动系数（nd）
+    linear_hardening: float | None = None,  # 覆盖线性硬化（nd）
+    visco_exponent: float | None = None,    # 覆盖黏性指数
+    mech_max_iters: int | None = None,      # 机械求解最大迭代
+    mech_tol: float | None = None,          # 机械求解收敛阈值
+    mech_outer_max_iters: int | None = None, # 单向分裂外循环
+    mech_outer_tol: float | None = None,    # 单向分裂外循环阈值
     run_dir: Path | None = None,            # 输出根目录（默认按日期/任务自动生成）
     task: str = "virtual_cycle",            # 任务标签（用于命名输出目录）
     auto_output: bool = False,              # 若 True 且 run_dir 提供/默认，则自动填充输出文件
@@ -129,14 +143,34 @@ def run_virtual_cycles(
         gres=base_fracture.gres * toughness_scale,
     )
     pfc_params = PFCParameters()
-    coupling = PFCCoupling(pfc_params, fracture, mode="density")
+    coupling_kwargs = {}
+    if yield_tau is not None:
+        coupling_kwargs["yield_tau"] = yield_tau
+    if flow_scale is not None:
+        coupling_kwargs["flow_scale"] = flow_scale
+    if linear_hardening is not None:
+        coupling_kwargs["linear_hardening"] = linear_hardening
+    if visco_exponent is not None:
+        coupling_kwargs["visco_exponent"] = visco_exponent
+    coupling = PFCCoupling(pfc_params, fracture, mode="density", **coupling_kwargs)
     energy = FreeEnergy(copper, fracture, coupling)
     
+    mech_cfg = MechanicalConfig()
+    if mech_max_iters is not None:
+        mech_cfg.max_iters = mech_max_iters
+    if mech_tol is not None:
+        mech_cfg.tol = mech_tol
+    if mech_outer_max_iters is not None:
+        mech_cfg.outer_max_iters = mech_outer_max_iters
+    if mech_outer_tol is not None:
+        mech_cfg.outer_tol = mech_outer_tol
+
     builder = Cu111StructureBuilder(
         grid,
         defect_fraction=0.08 if not defect_config else 0.0,
         defect_amplitude=0.12 if not defect_config else 0.0,
         defect_config=defect_config,
+        orientation_vector=orientation_vector,
     )
     structure = builder.build(seed=42)
 
@@ -152,7 +186,9 @@ def run_virtual_cycles(
         mask = (X >= x0) & (X <= x1) & (Y >= y0) & (Y <= y1) & (Z >= z0) & (Z <= z1)
         structure.fields["crack"][mask] = np.clip(notch_crack_value, 0.0, 1.0)
     
-    mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation, fracture_k=fracture.k)
+    mechanical = MechanicalEquilibriumSolver(
+        grid, copper, structure.orientation, fracture_k=fracture.k, config=mech_cfg
+    )
     if initial_vtk:
         initial_vtk.parent.mkdir(parents=True, exist_ok=True)
         write_vtk(initial_vtk, grid, structure.fields, macro_strain=(0.0, 0.0, 0.0), deform_coordinates=False)
@@ -171,9 +207,11 @@ def run_virtual_cycles(
             gres=base_fracture.gres * toughness_scale,
         )
         pfc_params = PFCParameters()
-        coupling = PFCCoupling(pfc_params, fracture, mode="density")
+        coupling = PFCCoupling(pfc_params, fracture, mode="density", **coupling_kwargs)
         energy = FreeEnergy(copper, fracture, coupling)
-        mechanical = MechanicalEquilibriumSolver(grid, copper, structure.orientation, fracture_k=fracture.k)
+        mechanical = MechanicalEquilibriumSolver(
+            grid, copper, structure.orientation, fracture_k=fracture.k, config=mech_cfg
+        )
         pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
         solver_cfg = SolverConfig(dt=5e-3, crack_relax=crack_relax, plastic_relax=plastic_relax, mech_plastic_weight=0.9, dir_coupling=dir_coupling)
         mu_extra = None
@@ -229,6 +267,14 @@ def run_virtual_cycles(
     # 2. 循环加载
     min_strain = -max_strain if min_strain is None else min_strain
     load_segments = [max_strain] if monotonic else [max_strain, 0.0, min_strain, 0.0]  # monotonic or triangle
+    if cycle_points is not None:
+        points_per_segment = max(1, int(round(cycle_points / len(load_segments))))
+        if points_per_segment * len(load_segments) != cycle_points:
+            print(
+                f"[warn] cycle_points={cycle_points} not divisible by {len(load_segments)}; "
+                f"using {points_per_segment} per segment -> {points_per_segment * len(load_segments)} points"
+            )
+        segment_steps = points_per_segment
 
     for cycle in range(1, cycles + 1):
         print(f"=== Starting Cycle {cycle} ===")
@@ -254,7 +300,10 @@ def run_virtual_cycles(
                 stress_vm_mean = float(np.mean(solver.state.get("stress_vm", 0.0)))
                 # RSS peak tracking (nd) per cycle
                 rss_max, _, _, _, rss_signed_max = coupling.compute_rss(
-                    stress_tensor, backstress=solver.state.get("backstress"), return_signed_max=True
+                    stress_tensor,
+                    backstress=solver.state.get("backstress"),
+                    return_signed_max=True,
+                    orientation=structure.orientation,
                 )
                 cycle_rss_peak = max(cycle_rss_peak, float(np.mean(rss_max)))
                 cycle_rss_peak_signed = float(np.mean(rss_signed_max)) if rss_signed_max is not None else 0.0
@@ -330,6 +379,24 @@ def run_virtual_cycles(
         if crack_mean >= failure_threshold:
             print(f"[STOP] Crack mean {crack_mean:.3f} reached threshold {failure_threshold}.")
             break
+
+        # Early stop if stabilized
+        if stable_window is not None and len(results) >= stable_window:
+            if stable_min_cycles is None:
+                stable_min_cycles = stable_window
+            if cycle >= stable_min_cycles:
+                rels = []
+                for name in stable_metrics:
+                    vals = np.array([getattr(r, name) for r in results[-stable_window:]], dtype=float)
+                    mean = float(np.mean(vals))
+                    rel = (float(np.max(vals)) - float(np.min(vals))) / (abs(mean) + 1e-12)
+                    rels.append(rel)
+                if all(r <= stable_tol for r in rels):
+                    print(
+                        f"[STOP] Stable over last {stable_window} cycles "
+                        f"(metrics={stable_metrics}, tol={stable_tol})."
+                    )
+                    break
 
     # 3. 后处理统计：Paris-like 与 Coffin–Manson
     plastic_ranges = []

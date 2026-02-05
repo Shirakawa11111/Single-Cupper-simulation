@@ -148,3 +148,15 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   应力–应变曲线图：`sim/tests/runs/2026-02-02/virtual_cycle_10c_100s_212301/virtual_cycle_stress_strain.png`  
   曲线指标：`sig_xx_GPa` ∈ [−3.237, 3.049]，`sig_vm_GPa(max)=4.594`，小应变等效模量 `E_eff≈135.99 GPa`（|ε|≤0.002 线性拟合）  
   注：裂纹长度未增长，Paris/Coffin–Manson 拟合为弱约束（da/dN≈0）。
+
+### 验证记录（2026-02-05）
+- 循环稳定判据：`N=5`、`tol=2%`（指标：`plastic_range`、`rss_peak_nd`）。
+- 实验对比（第 1000 周期，轴 -1,1,1，(111)[-101]，微应变×1e-6）：  
+  修正 Schmid：`m=0.272166`；实验/模拟叠加图：`sim/tests/runs/2026-02-05/exp_compare_cycle_00001000_151235/schmid_overlay.png`  
+  实验修正 CSV：`sim/tests/runs/2026-02-05/exp_compare_cycle_00001000_151235/experiment_schmid.csv`  
+  模拟修正 CSV：`sim/tests/runs/2026-02-05/exp_compare_cycle_00001000_151235/simulation_schmid.csv`
+- 稳定循环模拟（200 点/周期，max_strain=0.001286103，orientation=-1,1,1）：  
+  `cycles_run=9`，稳定后停止；`crack_mean=0`, `crack_length=0`, `accum_plastic_mean=2.683e-02`, `plastic_range=7.082e-04`, `rss_peak_nd=2.287e-04`  
+  输出：`sim/tests/runs/2026-02-05/fatigue_exp_match_200pts_tuned_fast_131238/virtual_cycle.csv`，  
+  `sim/tests/runs/2026-02-05/fatigue_exp_match_200pts_tuned_fast_131238/virtual_cycle_stress_strain.csv`
+  说明：加速版机械求解参数（`mech_max_iters=120`, `mech_outer_max_iters=3`, `mech_tol=2e-5`, `mech_outer_tol=2e-6`）。

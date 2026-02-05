@@ -45,6 +45,7 @@ class Cu111StructureBuilder:
         defect_fraction: float = 0.05,
         defect_amplitude: float = 0.2,
         noise: float = 1e-3,
+        orientation_vector: tuple[float, float, float] | None = None,
         orientation_map: np.ndarray | None = None,
         grain_labels: np.ndarray | None = None,
         grain_orientations: Dict[int, np.ndarray] | np.ndarray | None = None,
@@ -57,6 +58,7 @@ class Cu111StructureBuilder:
         self.defect_fraction = defect_fraction
         self.defect_amplitude = defect_amplitude
         self.noise = noise
+        self.orientation_vector = orientation_vector
         self.orientation_map = orientation_map
         self.grain_labels = grain_labels
         self.grain_orientations = grain_orientations
@@ -94,8 +96,12 @@ class Cu111StructureBuilder:
             for lbl in unique_labels:
                 orientations[labels == lbl] = _fetch_orientation(int(lbl))
             return orientations
-        # 3) Fallback: single [111]
-        generator = VirtualEBSDGenerator(self.grid.shape, self.defect_fraction)
+        # 3) Fallback: single [111] (or user-specified)
+        generator = VirtualEBSDGenerator(
+            self.grid.shape,
+            self.defect_fraction,
+            orientation_vector=self.orientation_vector or (1.0, 1.0, 1.0),
+        )
         return generator.orientation_field()
 
     def _grain_boundary_mask(self, orientations: np.ndarray) -> np.ndarray:
