@@ -1,0 +1,18 @@
+{
+  "results": {
+    "gnd_uniform_mean": 0.0,
+    "gnd_grad_mean": 0.0008164965809266771,
+    "gnd_double_mean": 0.0016329931618533542,
+    "ratio_double": 1.9999999975505103
+  },
+  "thresholds": {
+    "uniform_gnd_max": 1e-10,
+    "gradient_gnd_min": 1e-05,
+    "ratio_tol": 0.05
+  },
+  "timing": {
+    "total_s": 0.0065102080116048455
+  },
+  "passed": true,
+  "failures": {}
+}
