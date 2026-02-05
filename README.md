@@ -15,6 +15,7 @@
 - `sim/tests/regress_gnd_cycle.py`：低幅循环 GND 增长回归（输出 gnd_density_mean/Σ|γ_s| 趋势与参数快照）。
 - `sim/tests/plot_gnd_cycle.py`：gnd_cycle.csv 基线可视化（GND mean 与 accum_plastic 同图）。
 - `sim/tests/scan_gnd_orientations.py`：扫描晶向对 GND 分布/统计的敏感性。
+- `sim/tests/scan_hgnd_cycle.py`：h_gnd 4 点扫描（低幅循环），自动输出对比图/summary.csv。
 - `report.tex`：项目报告/公式/流程/输出说明（XeLaTeX + ctex）。
 
 ## 运行示例
@@ -177,6 +178,12 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   - h_gnd=0：`sim/tests/regress_runs/2026-02-05/gnd_cycle_hgnd0/summary.json`  
   - h_gnd=1e-4：`sim/tests/regress_runs/2026-02-05/gnd_cycle_hgnd1e-4/summary.json`  
   对比图：`sim/tests/regress_runs/2026-02-05/gnd_cycle_compare.png`
+- h_gnd 扫描（4 点，低幅循环）：  
+  根目录：`sim/tests/regress_runs/2026-02-05/gnd_cycle_hgnd_scan_4pt/`  
+  总结：`summary.csv`，对比图：`gnd_cycle_hgnd_scan.png`
 - 晶向扫描（低幅循环 + notch，小网格）：  
   输出根目录：`sim/tests/runs/2026-02-05/gnd_orient_scan_lowamp_notch_small_180348/`  
   方向：`[100]`, `[110]`, `[111]`, `[112]`；summary.json 含 gnd_mean/gnd_max/accum_plastic。
+- 晶向 × h_gnd 灵敏度（低幅循环 + notch，cycles=5，小网格）：  
+  输出根目录：`sim/tests/runs/2026-02-05/gnd_orient_hgnd_sens_193218/`  
+  汇总：`summary.csv`；对比图：`gnd_mean_vs_hgnd.png` / `accum_plastic_vs_hgnd.png`

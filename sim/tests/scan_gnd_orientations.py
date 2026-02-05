@@ -41,6 +41,7 @@ def main() -> None:
     parser.add_argument("--cycle-points", type=int, default=80, help="Points per cycle.")
     parser.add_argument("--grid-shape", type=str, default="32,16,8", help="Grid shape Nx,Ny,Nz.")
     parser.add_argument("--grid-spacing", type=str, default="1,1,1", help="Grid spacing dx,dy,dz.")
+    parser.add_argument("--h-gnd-list", type=str, default="", help="Comma list of h_gnd values.")
     parser.add_argument("--pfc-active", action="store_true", help="Enable PFC evolution.")
     parser.add_argument("--notch", action="store_true", help="Seed a default notch to induce gradients.")
     parser.add_argument("--notch-box", type=str, default="", help="Custom notch box x0,x1,y0,y1,z0,z1")
@@ -77,6 +78,8 @@ def main() -> None:
             (0.35 * nz * dz, 0.65 * nz * dz),
         )
 
+    h_gnd_list = [float(v.strip()) for v in args.h_gnd_list.split(",") if v.strip()] or [0.0]
+
     params = {
         "script": "scan_gnd_orientations",
         "args": {
@@ -88,40 +91,99 @@ def main() -> None:
             "grid_spacing": grid_spacing,
             "pfc_active": args.pfc_active,
             "notch_box": notch_box,
+            "h_gnd_list": h_gnd_list,
         },
     }
     (root / "params.json").write_text(json.dumps(params, indent=2), encoding="utf-8")
 
+    summary_rows = []
     for ori in orientations:
         ori_tag = f"ori_{ori[0]:g}_{ori[1]:g}_{ori[2]:g}".replace(".", "p")
-        run_dir = root / ori_tag
-        run_dir.mkdir(parents=True, exist_ok=True)
-        results, _, _ = run_virtual_cycles(
-            cycles=args.cycles,
-            max_strain=args.max_strain,
-            cycle_points=args.cycle_points,
-            orientation_vector=ori,
-            grid_shape=grid_shape,
-            grid_spacing=grid_spacing,
-            gnd_active=True,
-            pfc_active=args.pfc_active,
-            notch_box=notch_box,
-            stable_window=None,
-            csv_output=run_dir / "virtual_cycle.csv",
-            analysis_csv=run_dir / "virtual_cycle_analysis.csv",
-            stress_strain_csv=run_dir / "virtual_cycle_stress_strain.csv",
-            vtk_dir=run_dir / "vtk",
-            dump_dir=None,
-            initial_vtk=None,
-        )
-        summary = {
-            "orientation": ori,
-            "cycles": len(results),
-            "gnd_mean_last": results[-1].gnd_mean if results else 0.0,
-            "gnd_max_last": results[-1].gnd_max if results else 0.0,
-            "accum_plastic_last": results[-1].accum_plastic_mean if results else 0.0,
-        }
-        (run_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        ori_dir = root / ori_tag
+        ori_dir.mkdir(parents=True, exist_ok=True)
+        for h_gnd in h_gnd_list:
+            h_tag = f"hgnd_{h_gnd:.0e}".replace("+", "").replace("-", "m").replace(".", "p")
+            run_dir = ori_dir / h_tag
+            run_dir.mkdir(parents=True, exist_ok=True)
+            results, _, _ = run_virtual_cycles(
+                cycles=args.cycles,
+                max_strain=args.max_strain,
+                cycle_points=args.cycle_points,
+                orientation_vector=ori,
+                grid_shape=grid_shape,
+                grid_spacing=grid_spacing,
+                gnd_active=True,
+                pfc_active=args.pfc_active,
+                h_gnd=h_gnd,
+                notch_box=notch_box,
+                stable_window=None,
+                csv_output=run_dir / "virtual_cycle.csv",
+                analysis_csv=run_dir / "virtual_cycle_analysis.csv",
+                stress_strain_csv=run_dir / "virtual_cycle_stress_strain.csv",
+                vtk_dir=run_dir / "vtk",
+                dump_dir=None,
+                initial_vtk=None,
+            )
+            summary = {
+                "orientation": ori,
+                "h_gnd": h_gnd,
+                "cycles": len(results),
+                "gnd_mean_last": results[-1].gnd_mean if results else 0.0,
+                "gnd_max_last": results[-1].gnd_max if results else 0.0,
+                "accum_plastic_last": results[-1].accum_plastic_mean if results else 0.0,
+            }
+            summary_rows.append(summary)
+            (run_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    summary_path = root / "summary.csv"
+    with summary_path.open("w", encoding="utf-8") as fh:
+        fh.write("orientation,h_gnd,gnd_mean_last,gnd_max_last,accum_plastic_last\n")
+        for row in summary_rows:
+            o = row["orientation"]
+            fh.write(
+                f"{o[0]} {o[1]} {o[2]},{row['h_gnd']},{row['gnd_mean_last']:.6e},"
+                f"{row['gnd_max_last']:.6e},{row['accum_plastic_last']:.6e}\n"
+            )
+
+    # Plot: gnd_mean_last vs h_gnd for each orientation
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt  # noqa: E402
+        import numpy as np  # noqa: E402
+
+        fig, ax = plt.subplots(figsize=(6.4, 4.2))
+        for ori in orientations:
+            vals = [r for r in summary_rows if r["orientation"] == ori]
+            vals = sorted(vals, key=lambda x: x["h_gnd"])
+            hs = [v["h_gnd"] for v in vals]
+            gm = [v["gnd_mean_last"] for v in vals]
+            label = f"[{ori[0]:g}{ori[1]:g}{ori[2]:g}]"
+            ax.plot(hs, gm, marker="o", label=label)
+        ax.set_xlabel("h_gnd")
+        ax.set_ylabel("GND mean (last cycle)")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="upper left")
+        fig.tight_layout()
+        fig.savefig(root / "gnd_mean_vs_hgnd.png", dpi=160)
+
+        fig2, ax2 = plt.subplots(figsize=(6.4, 4.2))
+        for ori in orientations:
+            vals = [r for r in summary_rows if r["orientation"] == ori]
+            vals = sorted(vals, key=lambda x: x["h_gnd"])
+            hs = [v["h_gnd"] for v in vals]
+            am = [v["accum_plastic_last"] for v in vals]
+            label = f"[{ori[0]:g}{ori[1]:g}{ori[2]:g}]"
+            ax2.plot(hs, am, marker="s", label=label)
+        ax2.set_xlabel("h_gnd")
+        ax2.set_ylabel("Accumulated plastic (last cycle)")
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(loc="upper left")
+        fig2.tight_layout()
+        fig2.savefig(root / "accum_plastic_vs_hgnd.png", dpi=160)
+    except Exception as exc:  # pragma: no cover
+        print(f"[warn] plot failed: {exc}")
 
 
 if __name__ == "__main__":

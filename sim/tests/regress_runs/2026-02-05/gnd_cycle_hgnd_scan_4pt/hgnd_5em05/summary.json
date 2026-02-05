@@ -1,0 +1,9 @@
+{
+  "h_gnd": 5e-05,
+  "cycles": 5,
+  "gnd_mean_last": 2.6155093314910648e-05,
+  "gnd_max_last": 0.000329831895836911,
+  "accum_plastic_last": 0.00010244611493327315,
+  "gnd_growth": 2.03972236339977e-05,
+  "accum_growth": 7.5365266707404e-05
+}

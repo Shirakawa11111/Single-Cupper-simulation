@@ -1,0 +1,12 @@
+{
+  "orientation": [
+    1.0,
+    0.0,
+    0.0
+  ],
+  "h_gnd": 0.0001,
+  "cycles": 5,
+  "gnd_mean_last": 9.445018405224331e-07,
+  "gnd_max_last": 6.851440701442871e-05,
+  "accum_plastic_last": 4.691917626059637e-06
+}
