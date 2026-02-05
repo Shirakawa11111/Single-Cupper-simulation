@@ -53,7 +53,7 @@ python -m sim.tests.virtual_cycle \
    - 见 `comsol_bridge/README.md`：在 Windows 端启动桥接服务（连接 COMSOL Server），本地 Python 调接口提交任务、取回结果。  
    - 模型建议预先配置好 Export 节点（表格/曲线/场），任务只负责传参、求解、导出。  
 
-> 若需要，我可以根据你已有的 COMSOL 模型/导出节点，直接生成 “参数扫描 + 结果回传 + 拟合” 的 Python 脚本模板。
+> 若需要，可以根据已有的 COMSOL 模型/导出节点，直接生成 “参数扫描 + 结果回传 + 拟合” 的 Python 脚本模板。
 
 ## 最近更新
 - 塑性/方向场：新增 `plastic_measures`，机械 von Mises/轴向应变与 PFC 梯度按权重混合（默认机械占比 0.9），输出塑性向量。
