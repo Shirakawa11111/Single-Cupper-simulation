@@ -10,6 +10,7 @@
 - `sim/solver.py`：交替求解器（力学 → 塑性松弛 → 裂纹 → PFC），支持方向性驱动、应力耦合 μ_extra，跟踪 stress/stress_vm、plastic_vec。
 - `sim/io.py`：LAMMPS/VTK 输出（VTK 现为二进制 STRUCTURED_GRID，可选变形坐标），输出 accum_plastic/plastic_inst/方向分量与归一化场。
 - `sim/tests/virtual_cycle.py`：虚拟循环载荷驱动脚本（对称三角波），记录 CSV/标准疲劳指标 CSV、VTK、LAMMPS，拟合 Paris/Coffin–Manson 斜率。
+- `sim/tests/regress_microstrain.py`：微应变线弹性回归（σ–ε 比值与塑性漂移）。
 - `report.tex`：项目报告/公式/流程/输出说明（XeLaTeX + ctex）。
 
 ## 运行示例
@@ -160,3 +161,8 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   输出：`sim/tests/runs/2026-02-05/fatigue_exp_match_200pts_tuned_fast_131238/virtual_cycle.csv`，  
   `sim/tests/runs/2026-02-05/fatigue_exp_match_200pts_tuned_fast_131238/virtual_cycle_stress_strain.csv`
   说明：加速版机械求解参数（`mech_max_iters=120`, `mech_outer_max_iters=3`, `mech_tol=2e-5`, `mech_outer_tol=2e-6`）。
+- 回归（2026-02-05）：  
+  微应变线弹性：`sim/tests/regress_runs/2026-02-05/microstrain/summary.json`（passed）  
+  边界裂纹（小/默认）：`sim/tests/regress_runs/2026-02-05/bc_crack/summary.json`（passed）  
+  边界裂纹（large）：`sim/tests/regress_runs/2026-02-05/bc_crack_large/summary.json`（passed）  
+  边界裂纹（micron）：`sim/tests/regress_runs/2026-02-05/bc_crack_micron/summary.json`（passed）

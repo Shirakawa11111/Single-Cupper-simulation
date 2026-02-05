@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "results": {
+    "compression_phi_growth": 0.0,
+    "patch_div_norm": 0.0,
+    "patch_stress_std_ratio": 1.7465786197551905e-16,
+    "modeI_phi_mean_start": 0.007291666666666665,
+    "modeI_phi_mean_end": 0.007973339778455492,
+    "modeI_phi_mean_delta": 0.0006816731117888272
+  },
+  "thresholds": {
+    "compression_phi_growth_max": 1e-08,
+    "patch_div_norm_max": 1e-08,
+    "patch_stress_std_ratio_max": 1e-08,
+    "modeI_phi_mean_delta_min": 1e-06
+  },
+  "timing": {
+    "compression_s": 0.0526471670018509,
+    "patch_s": 0.01188787497812882,
+    "modeI_s": 3.0487757500377484,
+    "total_s": 3.113312625035178
+  },
+  "failures": {},
+  "split_compare": {
+    "spectral": {
+      "compression_phi_growth": 0.0,
+      "modeI_phi_mean_delta": 0.0006816731117888272
+    },
+    "volumetric": {
+      "compression_phi_growth": 5.238375559716534e-06,
+      "modeI_phi_mean_delta": 0.00068167310417298
+    },
+    "preferred": "spectral"
+  }
+}

@@ -40,10 +40,18 @@ def main() -> None:
     parser.add_argument("--flow-scale", type=float, default=None, help="Override flow_scale (nd).")
     parser.add_argument("--linear-hardening", type=float, default=None, help="Override linear_hardening (nd).")
     parser.add_argument("--visco-exponent", type=float, default=None, help="Override visco_exponent.")
+    parser.add_argument("--gamma0", type=float, default=None, help="Override slip gamma0.")
+    parser.add_argument("--slip-exponent", type=float, default=None, help="Override slip exponent n.")
+    parser.add_argument("--h-iso", type=float, default=None, help="Override isotropic hardening h_iso.")
+    parser.add_argument("--h-gnd", type=float, default=None, help="Override GND hardening h_gnd.")
     parser.add_argument("--mech-max-iters", type=int, default=None, help="Mechanical CG max iters.")
     parser.add_argument("--mech-tol", type=float, default=None, help="Mechanical CG tolerance.")
     parser.add_argument("--mech-outer-max-iters", type=int, default=None, help="Unilateral outer iters.")
     parser.add_argument("--mech-outer-tol", type=float, default=None, help="Unilateral outer tol.")
+    parser.add_argument("--pfc-active", action="store_true", help="Enable PFC evolution.")
+    parser.add_argument("--pfc-frozen", action="store_true", help="Disable PFC evolution.")
+    parser.add_argument("--gnd-active", action="store_true", help="Enable GND diagnostics.")
+    parser.add_argument("--gnd-burgers", type=float, default=1.0, help="Burgers vector scale (nd).")
     args = parser.parse_args()
 
     orientation = tuple(float(v.strip()) for v in args.orientation.split(","))
@@ -52,6 +60,12 @@ def main() -> None:
 
     run_dir = args.run_dir or _default_run_dir(args.tag)
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    pfc_active = True
+    if args.pfc_frozen:
+        pfc_active = False
+    elif args.pfc_active:
+        pfc_active = True
 
     results, paris, coffman = run_virtual_cycles(
         cycles=args.cycles,
@@ -69,10 +83,17 @@ def main() -> None:
         flow_scale=args.flow_scale,
         linear_hardening=args.linear_hardening,
         visco_exponent=args.visco_exponent,
+        gamma0=args.gamma0,
+        slip_exponent=args.slip_exponent,
+        h_iso=args.h_iso,
+        h_gnd=args.h_gnd,
         mech_max_iters=args.mech_max_iters,
         mech_tol=args.mech_tol,
         mech_outer_max_iters=args.mech_outer_max_iters,
         mech_outer_tol=args.mech_outer_tol,
+        pfc_active=pfc_active,
+        gnd_active=args.gnd_active,
+        gnd_burgers=args.gnd_burgers,
         csv_output=run_dir / "virtual_cycle.csv",
         analysis_csv=run_dir / "virtual_cycle_analysis.csv",
         stress_strain_csv=run_dir / "virtual_cycle_stress_strain.csv",

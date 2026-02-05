@@ -11,6 +11,7 @@ import numpy as np
 from scipy.sparse.linalg import LinearOperator, cg
 
 from .energy import Array, FreeEnergy, PFCCoupling
+from .dislocation import gnd_from_slip
 from .mechanics import MechanicalEquilibriumSolver, MechanicalConfig
 from .pfc import PFCEvolver
 
@@ -31,6 +32,11 @@ class SolverConfig:
     dir_coupling: float = 0.3
     # 机械应变对塑性的权重 (0~1)
     mech_plastic_weight: float = 0.7
+    # Whether to evolve PFC after initialization
+    pfc_active: bool = True
+    # Optional GND diagnostics
+    gnd_active: bool = False
+    gnd_burgers: float = 1.0
     mechanical: MechanicalConfig = field(default_factory=MechanicalConfig)
 
 
@@ -75,7 +81,12 @@ class AlternatingSolver:
         stress_vm = np.zeros_like(psi)
         plastic_tensor = np.zeros(psi.shape + (3, 3))  # accumulated plastic tensor (eigenstrain)
         accum_plastic = plastic_eq.copy()  # track accumulated scalar for hardening/toughness
-        backstress = np.zeros_like(stress)  # kinematic hardening back-stress tensor
+        backstress = np.zeros_like(stress)  # legacy placeholder (no longer used)
+        n_slip = len(self.coupling.slip_systems)
+        gamma_s = np.zeros((n_slip,) + psi.shape)
+        chi_s = np.zeros_like(gamma_s)
+        tau_c = np.full_like(psi, self.coupling.yield_tau)
+        gnd_density = np.zeros_like(psi)
         self.state = {
             "psi": psi,
             "crack": crack,
@@ -85,6 +96,10 @@ class AlternatingSolver:
             "plastic_tensor": plastic_tensor,
             "accum_plastic": accum_plastic,
             "backstress": backstress,
+            "gamma_s": gamma_s,
+            "chi_s": chi_s,
+            "tau_c": tau_c,
+            "gnd_density": gnd_density,
             "displacement": displacement,
             "history": history,
             "stress": stress,
@@ -101,6 +116,9 @@ class AlternatingSolver:
         plastic_tensor = self.state.get("plastic_tensor", np.zeros(psi.shape + (3, 3)))  # accumulated tensor
         accum_plastic = self.state.get("accum_plastic", plastic.copy())
         backstress = self.state.get("backstress", np.zeros(psi.shape + (3, 3)))
+        gamma_s = self.state.get("gamma_s")
+        chi_s = self.state.get("chi_s")
+        gnd_density = self.state.get("gnd_density")
         displacement = self.state["displacement"]
         history = self.state["history"]
 
@@ -109,27 +127,47 @@ class AlternatingSolver:
         stress_vm = von_mises(stress)
 
         # 2. 塑性场更新
-        eps_eq, eps_vec, epsp_tensor = self.coupling.plastic_measures(
-            psi,
-            accum_plastic,
-            plastic_vec,
-            strain=strain,
-            stress=stress,
-            backstress=backstress,
-            load_axis=self.config.load_axis,
-            mech_weight=self.config.mech_plastic_weight,
+        if gamma_s is None or chi_s is None:
+            raise RuntimeError("gamma_s/chi_s not initialized; call initialize_state first.")
+        need_gnd_hardening = self.coupling.h_gnd > 0.0
+        if need_gnd_hardening:
+            gnd_density, _ = gnd_from_slip(
+                gamma_s,
+                self.coupling.slip_systems,
+                self.orientation,
+                self.mechanical.grid,
+                burgers=self.config.gnd_burgers,
+            )
+        gamma_dot, epsp_inc, eps_vec, eps_eq, tau_c = self.coupling.slip_system_flow(
+            stress,
+            gamma_s,
+            chi_s,
+            dt=self.config.dt,
             orientation=self.orientation,
+            gnd_density=gnd_density if need_gnd_hardening else None,
+            dev_only=True,
         )
-        epsp_increment = self.config.plastic_relax * epsp_tensor
+        relax = self.config.plastic_relax
+        gamma_s = gamma_s + relax * self.config.dt * gamma_dot
+        chi_s = chi_s + relax * self.config.dt * (
+            self.coupling.kin_c * gamma_dot - self.coupling.kin_d * np.abs(gamma_dot) * chi_s
+        )
+        epsp_increment = relax * epsp_inc
         plastic_tensor = plastic_tensor + epsp_increment
-        eq_inc = np.sqrt((2.0 / 3.0) * np.sum(epsp_increment * epsp_increment, axis=(-2, -1)))
-        accum_plastic = accum_plastic + eq_inc
+        accum_plastic = np.sum(np.abs(gamma_s), axis=0)
         plastic = accum_plastic
-        plastic_inst = eps_eq
-        plastic_vec = np.clip(plastic_vec + self.config.plastic_relax * (eps_vec - plastic_vec), 0.0, 1.0)
-        # kinematic hardening (back-stress): simple Prager/Armstrong-Frederick form
-        backstress = backstress + self.coupling.kin_c * epsp_increment - self.coupling.kin_d * eq_inc[..., None, None] * backstress
-        backstress = 0.5 * (backstress + np.swapaxes(backstress, -1, -2))  # enforce symmetry
+        plastic_inst = eps_eq * relax
+        plastic_vec = np.clip(plastic_vec + relax * (eps_vec - plastic_vec), 0.0, 1.0)
+        backstress = backstress * 0.0
+
+        if self.config.gnd_active and not need_gnd_hardening:
+            gnd_density, _ = gnd_from_slip(
+                gamma_s,
+                self.coupling.slip_systems,
+                self.orientation,
+                self.mechanical.grid,
+                burgers=self.config.gnd_burgers,
+            )
         # Re-evaluate displacement/strain/stress with updated plastic tensor (one inner iteration)
         displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain, plastic_strain=plastic_tensor)
         stress_vm = von_mises(stress)
@@ -188,13 +226,14 @@ class AlternatingSolver:
         crack = (1.0 - omega) * crack + omega * phi_new
 
         # 5. PFC 演化 (【关键】传入宏观应变)
-        self.pfc.update_strain(macro_strain)
-        # 应力耦合的化学势附加项
-        if self.mu_extra_from_stress is not None:
-            extra_mu = self.mu_extra_from_stress(stress_vm)
-            self.pfc.extra_mu = lambda psi: extra_mu
-        psi = self.pfc.step(psi)
-        psi = self.coupling.constraint.project(psi)
+        if self.config.pfc_active:
+            self.pfc.update_strain(macro_strain)
+            # 应力耦合的化学势附加项
+            if self.mu_extra_from_stress is not None:
+                extra_mu = self.mu_extra_from_stress(stress_vm)
+                self.pfc.extra_mu = lambda psi: extra_mu
+            psi = self.pfc.step(psi)
+            psi = self.coupling.constraint.project(psi)
 
         self.state.update(
             {
@@ -206,6 +245,10 @@ class AlternatingSolver:
                 "plastic_tensor": plastic_tensor,
                 "accum_plastic": accum_plastic,
                 "backstress": backstress,
+                "gamma_s": gamma_s,
+                "chi_s": chi_s,
+                "tau_c": tau_c,
+                "gnd_density": gnd_density,
                 "displacement": displacement,
                 "history": history,
                 "stress": stress,

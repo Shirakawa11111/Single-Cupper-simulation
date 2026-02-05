@@ -1,0 +1,15 @@
+{
+  "results": {
+    "stress_ratio": 1.9999999999921543,
+    "accum_plastic_mean": 0.0
+  },
+  "thresholds": {
+    "linear_ratio_tol": 0.02,
+    "accum_plastic_max": 1e-08
+  },
+  "timing": {
+    "total_s": 0.02266608295030892
+  },
+  "passed": true,
+  "failures": {}
+}

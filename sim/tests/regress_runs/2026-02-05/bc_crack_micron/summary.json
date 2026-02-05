@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "results": {
+    "compression_phi_growth": 0.0,
+    "patch_div_norm": 0.0,
+    "patch_stress_std_ratio": 1.7465786197551905e-16,
+    "modeI_phi_mean_start": 0.007291666666666665,
+    "modeI_phi_mean_end": 0.007883864068952869,
+    "modeI_phi_mean_delta": 0.0005921974022862035
+  },
+  "thresholds": {
+    "compression_phi_growth_max": 1e-08,
+    "patch_div_norm_max": 1e-08,
+    "patch_stress_std_ratio_max": 1e-08,
+    "modeI_phi_mean_delta_min": 1e-06
+  },
+  "timing": {
+    "compression_s": 0.05041304096812382,
+    "patch_s": 0.012514041038230062,
+    "modeI_s": 3.125471082981676,
+    "total_s": 3.188401709019672
+  },
+  "failures": {}
+}

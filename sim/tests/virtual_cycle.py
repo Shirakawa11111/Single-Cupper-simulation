@@ -100,6 +100,10 @@ def run_virtual_cycles(
     flow_scale: float | None = None,        # 覆盖流动系数（nd）
     linear_hardening: float | None = None,  # 覆盖线性硬化（nd）
     visco_exponent: float | None = None,    # 覆盖黏性指数
+    gamma0: float | None = None,            # 覆盖滑移剪切速率系数
+    slip_exponent: float | None = None,     # 覆盖滑移指数 n
+    h_iso: float | None = None,             # 覆盖各向同性硬化
+    h_gnd: float | None = None,             # 覆盖 GND 硬化项
     mech_max_iters: int | None = None,      # 机械求解最大迭代
     mech_tol: float | None = None,          # 机械求解收敛阈值
     mech_outer_max_iters: int | None = None, # 单向分裂外循环
@@ -107,6 +111,9 @@ def run_virtual_cycles(
     run_dir: Path | None = None,            # 输出根目录（默认按日期/任务自动生成）
     task: str = "virtual_cycle",            # 任务标签（用于命名输出目录）
     auto_output: bool = False,              # 若 True 且 run_dir 提供/默认，则自动填充输出文件
+    pfc_active: bool = True,                # 是否演化 PFC
+    gnd_active: bool = False,               # 是否输出 GND 诊断
+    gnd_burgers: float = 1.0,               # Burgers 向量尺度（无量纲）
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 输出目录解析
@@ -152,6 +159,16 @@ def run_virtual_cycles(
         coupling_kwargs["linear_hardening"] = linear_hardening
     if visco_exponent is not None:
         coupling_kwargs["visco_exponent"] = visco_exponent
+    if gamma0 is not None:
+        coupling_kwargs["gamma0"] = gamma0
+    elif flow_scale is not None:
+        coupling_kwargs["gamma0"] = flow_scale
+    if slip_exponent is not None:
+        coupling_kwargs["slip_exponent"] = slip_exponent
+    if h_iso is not None:
+        coupling_kwargs["h_iso"] = h_iso
+    if h_gnd is not None:
+        coupling_kwargs["h_gnd"] = h_gnd
     coupling = PFCCoupling(pfc_params, fracture, mode="density", **coupling_kwargs)
     energy = FreeEnergy(copper, fracture, coupling)
     
@@ -213,7 +230,16 @@ def run_virtual_cycles(
             grid, copper, structure.orientation, fracture_k=fracture.k, config=mech_cfg
         )
         pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
-        solver_cfg = SolverConfig(dt=5e-3, crack_relax=crack_relax, plastic_relax=plastic_relax, mech_plastic_weight=0.9, dir_coupling=dir_coupling)
+        solver_cfg = SolverConfig(
+            dt=5e-3,
+            crack_relax=crack_relax,
+            plastic_relax=plastic_relax,
+            mech_plastic_weight=0.9,
+            dir_coupling=dir_coupling,
+            pfc_active=pfc_active,
+            gnd_active=gnd_active,
+            gnd_burgers=gnd_burgers,
+        )
         mu_extra = None
         if stress_mu_weight > 0:
             mu_extra = lambda svm: stress_mu_weight * svm / (np.max(np.abs(svm)) + 1e-12)
@@ -246,7 +272,16 @@ def run_virtual_cycles(
             )
     # pfc_extra_mu 将在 solver 内传入
     pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
-    solver_cfg = SolverConfig(dt=5e-3, crack_relax=crack_relax, plastic_relax=plastic_relax, mech_plastic_weight=0.9, dir_coupling=dir_coupling)
+    solver_cfg = SolverConfig(
+        dt=5e-3,
+        crack_relax=crack_relax,
+        plastic_relax=plastic_relax,
+        mech_plastic_weight=0.9,
+        dir_coupling=dir_coupling,
+        pfc_active=pfc_active,
+        gnd_active=gnd_active,
+        gnd_burgers=gnd_burgers,
+    )
     mu_extra = None
     if stress_mu_weight > 0:
         mu_extra = lambda svm: stress_mu_weight * svm / (np.max(np.abs(svm)) + 1e-12)
@@ -326,18 +361,25 @@ def run_virtual_cycles(
                     print(f"  Cycle {cycle} Substep {step}/{segment_steps} | Strain {current_strain:.4f}")
                     if vtk_dir:
                         vtk_dir.mkdir(parents=True, exist_ok=True)
+                        vtk_fields = {
+                            "crack": solver.state["crack"],
+                            "plastic": solver.state["plastic"],
+                            "plastic_inst": solver.state.get("plastic_inst"),
+                            "plastic_vec": solver.state["plastic_vec"],
+                            "psi": solver.state["psi"],
+                            "displacement": solver.state["displacement"],
+                            "stress_vm": solver.state["stress_vm"],
+                        }
+                        gnd = solver.state.get("gnd_density")
+                        if gnd is not None:
+                            vtk_fields["gnd_density"] = gnd
+                        tau_c = solver.state.get("tau_c")
+                        if tau_c is not None:
+                            vtk_fields["tau_c"] = tau_c
                         write_vtk(
                             vtk_dir / f"anim_frame_{frame_id:05d}.vtk",
                             grid,
-                            {
-                                "crack": solver.state["crack"],
-                                "plastic": solver.state["plastic"],
-                                "plastic_inst": solver.state.get("plastic_inst"),
-                                "plastic_vec": solver.state["plastic_vec"],
-                                "psi": solver.state["psi"],
-                                "displacement": solver.state["displacement"],
-                                "stress_vm": solver.state["stress_vm"],
-                            },
+                            vtk_fields,
                             macro_strain=macro,
                             deform_coordinates=True,
                         )

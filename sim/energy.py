@@ -126,6 +126,12 @@ class PFCCoupling:
         # kinematic back-stress coefficients (Prager/Armstrong-Frederick style)
         kin_c: float = 2.5e-4,
         kin_d: float = 1.2,
+        # slip-system viscoplastic parameters
+        gamma0: float = 1.0e-2,
+        slip_exponent: float = 8.0,
+        h_iso: float | None = None,
+        h_gnd: float = 0.0,
+        tau_c_weight: Array | None = None,
     ) -> None:
         self.pfc_params = pfc_params
         self.fracture = fracture
@@ -138,6 +144,10 @@ class PFCCoupling:
         self.linear_hardening = linear_hardening
         self.kin_c = kin_c
         self.kin_d = kin_d
+        self.gamma0 = gamma0
+        self.slip_exponent = slip_exponent
+        self.h_iso = linear_hardening if h_iso is None else h_iso
+        self.h_gnd = h_gnd
         # Precompute valid FCC slip systems (n, m) with m·n=0
         normals = np.array(
             [
@@ -166,6 +176,13 @@ class PFCCoupling:
             for m in dirs:
                 if np.abs(np.dot(m, n)) < 1e-6:  # ensure orthogonality
                     self.slip_systems.append((m, n))
+        if tau_c_weight is None:
+            self.tau_c_weight = np.ones(len(self.slip_systems), dtype=float)
+        else:
+            weights = np.asarray(tau_c_weight, dtype=float)
+            if weights.shape != (len(self.slip_systems),):
+                raise ValueError("tau_c_weight must match slip system count.")
+            self.tau_c_weight = weights
 
     def compute_rss(
         self,
@@ -362,6 +379,83 @@ class PFCCoupling:
         eps_vec = np.nan_to_num(eps_vec)
         epsp_tensor = np.nan_to_num(epsp_tensor)
         return eps_eq, eps_vec, epsp_tensor
+
+    def slip_system_flow(
+        self,
+        stress: Array,
+        gamma_s: Array,
+        chi_s: Array,
+        dt: float,
+        orientation: Array | None = None,
+        gnd_density: Array | None = None,
+        dev_only: bool = True,
+    ) -> tuple[Array, Array, Array, Array, Array]:
+        """
+        Multi-slip viscoplastic update helper.
+
+        Returns:
+          gamma_dot (per slip), epsp_increment, plastic_vec, eps_eq (rate), tau_c
+        """
+        if gamma_s.shape != chi_s.shape:
+            raise ValueError("gamma_s and chi_s must have the same shape.")
+        if gamma_s.shape[0] != len(self.slip_systems):
+            raise ValueError("gamma_s first dimension must match slip system count.")
+        orientation_local = None
+        if orientation is not None:
+            orientation_local = np.asarray(orientation)
+            if orientation_local.shape not in ((3, 3), stress.shape[:-2] + (3, 3)):
+                raise ValueError("orientation must be (3,3) or match stress shape")
+
+        # symmetric deviatoric stress
+        stress_eff = 0.5 * (stress + np.swapaxes(stress, -1, -2))
+        if dev_only:
+            tr = np.trace(stress_eff, axis1=-2, axis2=-1)[..., None, None] / 3.0
+            stress_eff = stress_eff - tr * np.eye(3)
+
+        accum_abs = np.sum(np.abs(gamma_s), axis=0)
+        tau_c = self.yield_tau + self.h_iso * accum_abs
+        if gnd_density is not None and self.h_gnd > 0.0:
+            tau_c = tau_c + self.h_gnd * np.sqrt(np.clip(gnd_density, 0.0, None))
+        tau_c = np.clip(tau_c, self.yield_tau, None)
+
+        gamma_dot = np.zeros_like(gamma_s)
+        epsp_increment = np.zeros_like(stress)
+        vec = np.zeros(stress.shape[:-1])
+        weights = self.tau_c_weight
+
+        for k, (m, n) in enumerate(self.slip_systems):
+            if orientation_local is None:
+                m_lab = m
+                n_lab = n
+                mn = np.outer(m_lab, n_lab)
+            else:
+                m_lab = np.einsum("...ij,j->...i", orientation_local, m, optimize=True)
+                n_lab = np.einsum("...ij,j->...i", orientation_local, n, optimize=True)
+                mn = np.einsum("...i,...j->...ij", m_lab, n_lab, optimize=True)
+            tau = np.einsum("...ij,...ij->...", stress_eff, mn, optimize=True)
+            tau_eff = tau - chi_s[k]
+            tau_c_k = tau_c * weights[k]
+            overstress = np.clip(np.abs(tau_eff) - tau_c_k, 0.0, None)
+            ratio = overstress / (tau_c_k + overstress + 1e-12)
+            gamma_dot_k = self.gamma0 * (ratio ** self.slip_exponent) * np.sign(tau_eff)
+            gamma_dot[k] = gamma_dot_k
+
+            sym_mn = 0.5 * (mn + np.swapaxes(mn, -1, -2))
+            epsp_increment += (dt * gamma_dot_k)[..., None, None] * sym_mn
+
+            if m_lab.ndim == 1:
+                vec += np.abs(gamma_dot_k)[..., None] * np.abs(m_lab)
+            else:
+                vec += np.abs(gamma_dot_k)[..., None] * np.abs(m_lab)
+
+        norm = np.linalg.norm(vec, axis=-1)
+        plastic_vec = np.zeros_like(vec)
+        mask = norm > 0.0
+        plastic_vec[mask] = vec[mask] / (norm[mask][..., None] + 1e-12)
+
+        eq_inc = np.sqrt((2.0 / 3.0) * np.sum(epsp_increment * epsp_increment, axis=(-2, -1)))
+        eps_eq_rate = eq_inc / max(dt, 1e-12)
+        return gamma_dot, epsp_increment, plastic_vec, eps_eq_rate, tau_c
 
     def degraded_toughness(
         self,
