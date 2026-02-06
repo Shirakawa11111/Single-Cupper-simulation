@@ -77,7 +77,7 @@ python sim/tests/run_virtual_cycle_config.py \
 python sim/tests/scan_crack_onset.py \
   --config sim/configs/crack_onset_scan.yaml \
   --max-runtime-warnings 50 \
-  --max-mechanical-not-accepted-steps 320 \
+  --max-mechanical-not-accepted-steps 160 \
   --max-crack-cg-nonconverged-steps 320 \
   --max-nonfinite-count 0
 ```
@@ -87,7 +87,7 @@ Phase-2 门禁（推荐）：
 python sim/tests/regress_phase2.py \
   --strict \
   --max-runtime-warnings 50 \
-  --max-mechanical-not-accepted-steps 320 \
+  --max-mechanical-not-accepted-steps 160 \
   --max-crack-cg-nonconverged-steps 320 \
   --scan-config sim/configs/crack_onset_scan.yaml
 ```
@@ -106,6 +106,7 @@ python sim/tests/regress_phase2.py \
 - `run_virtual_cycle_config.py` 现会输出 `runtime_warning_count`、`runtime_warning_items` 与 `stability_diagnostics`（含 mechanical/crack CG 与 nonfinite 计数）。
 - `scan_crack_onset.py` 会输出 `summary.json` + `summary.csv`，并区分 `onset_length`（长度主判据）与 `onset_mean_aux`（均值辅助判据）。
 - `sim/configs/crack_onset_scan.yaml` 默认使用 `crack_length_threshold=0.4`，可避免 `crack_length` 长时间恒零。
+- 默认机械策略切到 `volumetric + jacobi`，并启用 `mech_clip_solution_on_limit=true`（解超限裁剪而非直接拒收）。
 - 标定闭环执行模板见 `docs/calibration_phase2.md`。
 
 ## COMSOL 训练/标定（可选）
@@ -305,9 +306,20 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
 - 判据更新（`sim/configs/crack_onset_scan.yaml`）：
   - `min_crack_delta=5.0e-2`（长度主判据）
   - `allow_mean_aux=true` + `min_crack_length_for_mean_aux=1.0e-1`
-  - `max_mechanical_not_accepted_steps=320`
+  - `max_mechanical_not_accepted_steps=160`
   - `max_crack_cg_nonconverged_steps=320`
   - `max_runtime_warnings=50`
 - 结果解读：
   - notch 三个 case：`onset_length=true`
   - no-notch 对照：`onset=false` 且 `checks_ok=true`（作为负对照保留）
+
+### 验证记录（2026-02-06，unilateral 分支预条件/算子替换）
+- 对照矩阵（原策略，`limit=10`）：
+  `sim/tests/regress_runs/2026-02-06/unilateral_matrix_l10/`  
+  结果：`spectral/volumetric × none/jacobi` 四组均为 `mechanical_not_accepted_steps=320`。
+- 采用新策略（`volumetric + jacobi + mech_clip_solution_on_limit=true + mech_regularization=1e-4`）后：
+  - 单 case 320-step：`sim/tests/regress_runs/2026-02-06/crack_onset_aggressive_clip_320/summary.json`
+    - `mech_not_accepted_steps=0`
+  - 全扫描 4 cases：`sim/tests/regress_runs/2026-02-06/crack_onset_scan_clip_full/summary.json`
+    - 四个 case 均 `mech_not_accepted_steps=0`，满足 `<160` 目标。
+- 备注：notch case 中 `mechanical_solution_clipped_steps` 较高，后续应继续压低裁剪依赖（通过更稳健线性算子/预条件组合）。

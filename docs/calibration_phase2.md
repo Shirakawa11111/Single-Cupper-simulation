@@ -34,7 +34,7 @@ python sim/tests/regress_phase2.py --strict
 python sim/tests/run_virtual_cycle_config.py \
   --config sim/configs/fatigue_lowamp.yaml \
   --max-runtime-warnings 50 \
-  --max-mechanical-not-accepted-steps 320 \
+  --max-mechanical-not-accepted-steps 160 \
   --max-crack-cg-nonconverged-steps 320 \
   --max-nonfinite-count 0
 ```
@@ -46,7 +46,7 @@ python sim/tests/run_virtual_cycle_config.py \
 python sim/tests/scan_crack_onset.py \
   --config sim/configs/crack_onset_scan.yaml \
   --max-runtime-warnings 50 \
-  --max-mechanical-not-accepted-steps 320 \
+  --max-mechanical-not-accepted-steps 160 \
   --max-crack-cg-nonconverged-steps 320 \
   --max-nonfinite-count 0
 ```
@@ -60,3 +60,6 @@ python sim/tests/scan_crack_onset.py \
 - Onset should be length-led: prefer `onset_length=true`; `onset_mean_aux` is auxiliary.
 - Negative control (`no_notch_control`) should keep `onset=false` while `checks_ok=true`.
 - Experimental overlay mismatch reduced and documented with plots/metrics.
+- Mechanical branch should satisfy `max_mechanical_not_accepted_steps <= 160` under the current
+  unilateral setup (`mech_unilateral_mode=volumetric`, `mech_preconditioner=jacobi`,
+  `mech_clip_solution_on_limit=true`).

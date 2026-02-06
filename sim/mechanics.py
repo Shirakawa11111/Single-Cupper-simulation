@@ -78,6 +78,8 @@ class MechanicalConfig:
     accept_incomplete_cg: bool = False
     # Reject iterative solutions with unrealistic absolute magnitude.
     solution_abs_limit: float = 10.0
+    # When True, clip solution to `solution_abs_limit` instead of rejecting it.
+    clip_solution_on_limit: bool = False
     # Fallback to GMRES when CG fails residual acceptance.
     enable_gmres_fallback: bool = False
     gmres_restart: int = 40
@@ -164,12 +166,28 @@ class MechanicalEquilibriumSolver:
         x0: np.ndarray,
         sanitize: Callable[[np.ndarray], np.ndarray] | None = None,
         preconditioner: LinearOperator | None = None,
-    ) -> tuple[np.ndarray, int, float, int, str, bool]:
+    ) -> tuple[np.ndarray, int, float, int, str, bool, bool]:
         sanitize_fn = sanitize or (lambda v: v)
         x0_eval = sanitize_fn(np.nan_to_num(x0.copy(), nan=0.0, posinf=0.0, neginf=0.0))
         rhs_norm = self._safe_l2_norm(rhs)
         if (not np.isfinite(rhs_norm)) or rhs_norm < 1e-14:
-            return x0_eval, 0, 0.0, 0, "rhs_skip", True
+            return x0_eval, 0, 0.0, 0, "rhs_skip", True, False
+
+        def enforce_solution_limit(vec: np.ndarray) -> tuple[np.ndarray, bool, bool]:
+            arr = sanitize_fn(np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0))
+            is_finite = bool(np.all(np.isfinite(arr)))
+            clipped = False
+            if is_finite:
+                limit = float(self.config.solution_abs_limit)
+                if np.isfinite(limit) and limit > 0.0:
+                    max_abs = float(np.max(np.abs(arr)))
+                    if max_abs > limit:
+                        if self.config.clip_solution_on_limit:
+                            arr = arr * (limit / (max_abs + 1e-30))
+                            clipped = True
+                        else:
+                            is_finite = False
+            return arr, is_finite, clipped
 
         warn_count = 0
         with warnings.catch_warnings(record=True) as caught:
@@ -185,10 +203,7 @@ class MechanicalEquilibriumSolver:
             )
         warn_count += int(sum(1 for w in caught if issubclass(w.category, RuntimeWarning)))
 
-        x_cg_eval = sanitize_fn(np.nan_to_num(x_cg, nan=0.0, posinf=0.0, neginf=0.0))
-        cg_finite = bool(np.all(np.isfinite(x_cg_eval)))
-        if cg_finite:
-            cg_finite = float(np.max(np.abs(x_cg_eval))) <= float(self.config.solution_abs_limit)
+        x_cg_eval, cg_finite, cg_clipped = enforce_solution_limit(x_cg)
         rel_cg = self._relative_residual(linop, x_cg_eval, rhs) if cg_finite else float("inf")
         cg_incomplete_ok = (
             self.config.accept_incomplete_cg
@@ -199,7 +214,9 @@ class MechanicalEquilibriumSolver:
         cg_ok = (info_cg == 0 or rel_cg <= self.config.accept_rel_residual or cg_incomplete_ok) and cg_finite
         if cg_ok:
             method = "cg_incomplete" if cg_incomplete_ok and info_cg != 0 else "cg"
-            return x_cg_eval, int(info_cg), float(rel_cg), warn_count, method, True
+            if cg_clipped:
+                method = f"{method}_clip"
+            return x_cg_eval, int(info_cg), float(rel_cg), warn_count, method, True, cg_clipped
 
         if self.config.enable_gmres_fallback:
             restart = max(5, int(self.config.gmres_restart))
@@ -218,17 +235,15 @@ class MechanicalEquilibriumSolver:
                     M=preconditioner,
                 )
             warn_count += int(sum(1 for w in caught if issubclass(w.category, RuntimeWarning)))
-            x_gmres_eval = sanitize_fn(np.nan_to_num(x_gmres, nan=0.0, posinf=0.0, neginf=0.0))
-            gmres_finite = bool(np.all(np.isfinite(x_gmres_eval)))
-            if gmres_finite:
-                gmres_finite = float(np.max(np.abs(x_gmres_eval))) <= float(self.config.solution_abs_limit)
+            x_gmres_eval, gmres_finite, gmres_clipped = enforce_solution_limit(x_gmres)
             rel_gmres = self._relative_residual(linop, x_gmres_eval, rhs) if gmres_finite else float("inf")
             gmres_ok = (info_gmres == 0 or rel_gmres <= self.config.accept_rel_residual) and gmres_finite
             if gmres_ok:
-                return x_gmres_eval, int(info_gmres), float(rel_gmres), warn_count, "gmres", True
-            return x0_eval.copy(), int(info_gmres), float(rel_gmres), warn_count, "hold", False
+                method = "gmres_clip" if gmres_clipped else "gmres"
+                return x_gmres_eval, int(info_gmres), float(rel_gmres), warn_count, method, True, gmres_clipped
+            return x0_eval.copy(), int(info_gmres), float(rel_gmres), warn_count, "hold", False, False
 
-        return x0_eval.copy(), int(info_cg), float(rel_cg), warn_count, "hold", False
+        return x0_eval.copy(), int(info_cg), float(rel_cg), warn_count, "hold", False, False
 
     def _build_preconditioner(self, g_mask: Array) -> LinearOperator | None:
         if self.config.preconditioner != "jacobi":
@@ -338,6 +353,7 @@ class MechanicalEquilibriumSolver:
         rel_residual = 0.0
         gmres_fallback_used = False
         preconditioner = self._build_preconditioner(g_mask)
+        solution_clipped = False
 
         if not self.config.unilateral:
             def sanitize_solution(vec: np.ndarray) -> np.ndarray:
@@ -366,11 +382,12 @@ class MechanicalEquilibriumSolver:
             u0 = displacement.reshape(-1)
             rhs_norm = float(np.linalg.norm(rhs))
             max_rhs_norm = max(max_rhs_norm, rhs_norm)
-            solution, info, rel_residual, warn_n, solver_used, accepted = self._iterative_solve(
+            solution, info, rel_residual, warn_n, solver_used, accepted, clipped = self._iterative_solve(
                 linop, rhs, u0, sanitize=sanitize_solution, preconditioner=preconditioner
             )
+            solution_clipped = bool(clipped)
             runtime_warning_count += int(warn_n)
-            gmres_fallback_used = solver_used == "gmres"
+            gmres_fallback_used = str(solver_used).startswith("gmres")
             last_cg_info = int(info)
             if not accepted:
                 cg_failures += 1
@@ -437,11 +454,12 @@ class MechanicalEquilibriumSolver:
                 u0 = u.reshape(-1)
                 rhs_norm = float(np.linalg.norm(rhs))
                 max_rhs_norm = max(max_rhs_norm, rhs_norm)
-                solution, info, rel_residual, warn_n, solver_used, accepted = self._iterative_solve(
+                solution, info, rel_residual, warn_n, solver_used, accepted, clipped = self._iterative_solve(
                     linop, rhs, u0, sanitize=sanitize_solution, preconditioner=preconditioner
                 )
+                solution_clipped = solution_clipped or bool(clipped)
                 runtime_warning_count += int(warn_n)
-                gmres_fallback_used = gmres_fallback_used or solver_used == "gmres"
+                gmres_fallback_used = gmres_fallback_used or str(solver_used).startswith("gmres")
                 last_cg_info = int(info)
                 if not accepted:
                     cg_failures += 1
@@ -473,6 +491,7 @@ class MechanicalEquilibriumSolver:
             "runtime_warning_count": int(runtime_warning_count),
             "gmres_fallback_used": bool(gmres_fallback_used),
             "preconditioner": str(self.config.preconditioner),
+            "solution_clipped": bool(solution_clipped),
         }
 
         total_strain = sym_grad(u, self.spacing, self.grid.periodic) + macro

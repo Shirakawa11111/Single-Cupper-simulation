@@ -333,6 +333,9 @@ class AlternatingSolver:
                 mech_info_second.get("rel_residual", mech_info_first.get("rel_residual", 0.0))
             ),
             "mechanical_last_accepted": bool(mech_info_second.get("accepted", mech_info_first.get("accepted", True))),
+            "mechanical_solution_clipped": bool(
+                mech_info_second.get("solution_clipped", mech_info_first.get("solution_clipped", False))
+            ),
             "crack_cg_info": crack_cg_info,
             "crack_cg_converged": crack_cg_info == 0,
             "crack_cg_rel_residual": crack_cg_rel_res,

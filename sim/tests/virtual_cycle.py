@@ -120,6 +120,7 @@ def run_virtual_cycles(
     mech_gmres_restart: int | None = None,  # GMRES restart
     mech_gmres_maxiter: int | None = None,  # GMRES maxiter
     mech_solution_abs_limit: float | None = None, # 迭代解绝对值上限
+    mech_clip_solution_on_limit: bool | None = None, # 解幅值超限时是否裁剪而非拒收
     mech_unilateral_mode: str | None = None,  # 单向分裂模式: spectral/volumetric
     mech_preconditioner: str | None = None,  # 机械线性求解预条件: none/jacobi
     mech_preconditioner_floor: float | None = None,  # Jacobi 对角下限
@@ -215,6 +216,8 @@ def run_virtual_cycles(
         mech_cfg.gmres_maxiter = mech_gmres_maxiter
     if mech_solution_abs_limit is not None:
         mech_cfg.solution_abs_limit = mech_solution_abs_limit
+    if mech_clip_solution_on_limit is not None:
+        mech_cfg.clip_solution_on_limit = mech_clip_solution_on_limit
     if mech_unilateral_mode is not None:
         if mech_unilateral_mode not in ("spectral", "volumetric"):
             raise ValueError("mech_unilateral_mode must be 'spectral' or 'volumetric'.")
@@ -355,6 +358,7 @@ def run_virtual_cycles(
         "mechanical_gmres_fallback_steps": 0,
         "mechanical_not_accepted_steps": 0,
         "mechanical_hold_steps": 0,
+        "mechanical_solution_clipped_steps": 0,
         "mechanical_rel_residual_nonfinite_steps": 0,
         "mechanical_rel_residual_max": 0.0,
         "crack_cg_nonconverged_steps": 0,
@@ -408,6 +412,8 @@ def run_virtual_cycles(
                     solver_diag["mechanical_gmres_fallback_steps"] += 1
                 if str(step_diag.get("mechanical_last_solver_used", "cg")) == "hold":
                     solver_diag["mechanical_hold_steps"] += 1
+                if bool(step_diag.get("mechanical_solution_clipped", False)):
+                    solver_diag["mechanical_solution_clipped_steps"] += 1
                 if not bool(step_diag.get("mechanical_last_accepted", True)):
                     solver_diag["mechanical_not_accepted_steps"] += 1
                 rel_res = float(step_diag.get("mechanical_last_rel_residual", 0.0))
@@ -659,6 +665,7 @@ def run_virtual_cycles(
                 "mechanical_gmres_fallback_steps": int(solver_diag["mechanical_gmres_fallback_steps"]),
                 "mechanical_not_accepted_steps": int(solver_diag["mechanical_not_accepted_steps"]),
                 "mechanical_hold_steps": int(solver_diag["mechanical_hold_steps"]),
+                "mechanical_solution_clipped_steps": int(solver_diag["mechanical_solution_clipped_steps"]),
                 "mechanical_rel_residual_nonfinite_steps": int(
                     solver_diag["mechanical_rel_residual_nonfinite_steps"]
                 ),

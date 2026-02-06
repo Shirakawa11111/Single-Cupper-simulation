@@ -2,7 +2,7 @@
 
 Project path: /Users/bojingkai/Desktop/单晶铜拉伸模拟
 Date: 2026-02-06
-Current branch/commit: main @ 24be1d1 (Phase-2 stability gate and crack-onset threshold lock)
+Current branch/commit: main @ f71fab8 (Phase-2 stability gate + unilateral diagnostics)
 
 Status
 - Working tree is dirty with many generated artifacts (pycache, VTKs, test runs). Do not commit these.
@@ -34,6 +34,7 @@ Week-2 in-progress changes (2026-02-06)
   - `docs/calibration_phase2.md`
 - Solver strategy updates (second pass):
   - mechanical iterative solve now supports residual acceptance, solution magnitude guard, optional GMRES fallback, and rigid-translation removal.
+  - mechanical iterative solve now supports optional `clip_solution_on_limit` (解超限裁剪而非直接拒收) and reports `solution_clipped`.
   - crack CG now supports residual/incomplete acceptance to avoid update stalls.
 
 Key scripts to rerun
@@ -69,6 +70,9 @@ Recent outputs (not committed)
 - sim/tests/regress_runs/2026-02-06/phase2_gate_200918/
 - sim/tests/regress_runs/2026-02-06/crack_onset_scan_full_locked_v2/
 - sim/tests/regress_runs/2026-02-06/crack_onset_scan_full_locked_v3/
+- sim/tests/regress_runs/2026-02-06/unilateral_matrix_l10/
+- sim/tests/regress_runs/2026-02-06/crack_onset_aggressive_clip_320/
+- sim/tests/regress_runs/2026-02-06/crack_onset_scan_clip_full/
 
 Phase-1 validation snapshot (2026-02-06)
 - Strict suite command:
@@ -113,12 +117,18 @@ Numerical notes
     - `min_crack_length_for_mean_aux=1.0e-1`
     - `max_runtime_warnings=50`
     - `max_mechanical_cg_failures=1300`
-    - `max_mechanical_not_accepted_steps=320`
+    - `max_mechanical_not_accepted_steps=160` (current config target)
     - `max_crack_cg_nonconverged_steps=320`
     - `max_nonfinite_count=0`
+- Unilateral 分支预条件/算子替换实验（2026-02-06）:
+  - baseline matrix (`unilateral_matrix_l10`): `spectral/volumetric × none/jacobi` 均 `mechanical_not_accepted_steps=320`.
+  - clip strategy (`volumetric + jacobi + mech_clip_solution_on_limit=true + mech_regularization=1e-4`):
+    - single-case 320-step: `crack_onset_aggressive_clip_320` => `mechanical_not_accepted_steps=0`
+    - full 4-case scan: `crack_onset_scan_clip_full` => all cases `mechanical_not_accepted_steps=0`
+    - scan criteria with `max_mechanical_not_accepted_steps=160` passes.
 - Residual risk:
-  - notch cases still show frequent mechanical `info>0` and high `mechanical_not_accepted_steps`.
-  - keep this as next numerical-robustness target (preconditioned operator or alternative linear solver for unilateral branch).
+  - notch cases show high `mechanical_solution_clipped_steps` (close to full-step clipping).
+  - next numerical target is reducing clipping dependency while keeping `max_mechanical_not_accepted_steps<160`.
 
 Open decisions / next steps
 - [Resolved for Phase-1] Physical reference mapping:
@@ -132,7 +142,7 @@ Open decisions / next steps
   - confirm whether high `mechanical_cg_failures` reflects true non-convergence vs expected null-space behavior.
   - if needed, add preconditioner/regularization or solver fallback for unilateral branch.
 - Continue tightening Phase-2 thresholds after solver improvements:
-  - lower `max_mechanical_not_accepted_steps`
+  - keep `max_mechanical_not_accepted_steps=160` stable while reducing `mechanical_solution_clipped_steps`
   - lower `max_crack_cg_nonconverged_steps`
 
 Notes
