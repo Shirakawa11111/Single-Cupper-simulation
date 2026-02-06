@@ -1,8 +1,27 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
 # Large simulation outputs
+sim/tests/runs/
+sim/tests/regress_runs/
+sim/tests/seeded_cu_smoke/
 sim/tests/virtual_cycle_vtk/
 sim/tests/virtual_cycle_lammpstrj/
 sim/tests/amp_runs_parallel_latest/
 sim/tests/amp_runs_parallel/
 
-# macOS
-.DS_Store
+# Generated artifacts
+*.vtk
+*.lammpstrj
+*.data
+sim/sim/

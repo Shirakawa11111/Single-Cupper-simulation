@@ -1,0 +1,16 @@
+description: "Phase-1 baseline monotonic tension check (single-cycle)."
+virtual_cycle:
+  task: "monotonic_baseline"
+  auto_output: true
+  cycles: 1
+  monotonic: true
+  max_strain: 0.01
+  segment_steps: 80
+  orientation_vector: [1.0, 1.0, 1.0]
+  grid_shape: [64, 32, 8]
+  grid_spacing: [1.0, 1.0, 1.0]
+  grid_periodic: [true, true, false]
+  pfc_active: false
+  gnd_active: true
+  stress_mu_weight: 0.0
+  toughness_scale: 0.1

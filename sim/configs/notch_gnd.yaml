@@ -1,0 +1,21 @@
+description: "Phase-1 notch-assisted GND sensitivity check."
+virtual_cycle:
+  task: "notch_gnd"
+  auto_output: true
+  cycles: 8
+  max_strain: 0.005
+  cycle_points: 120
+  orientation_vector: [1.0, 1.0, 1.0]
+  grid_shape: [32, 16, 8]
+  grid_spacing: [1.0, 1.0, 1.0]
+  grid_periodic: [true, true, false]
+  notch_box:
+    - [11.2, 14.4]
+    - [7.2, 8.8]
+    - [2.8, 5.2]
+  notch_crack_value: 0.6
+  pfc_active: false
+  gnd_active: true
+  h_gnd: 1.0e-4
+  toughness_scale: 0.1
+  stable_window: null

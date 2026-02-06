@@ -5,6 +5,15 @@
 - 主要变量：PFC 密度 ψ，裂纹场 φ，累积等效塑性（accum_plastic）与瞬时代理（plastic_inst）及方向分量（plastic_vec），位移场（微观校正 + 宏观总位移），应力张量。
 - 能量框架：弹性正/负能分裂（谱分裂或体积-偏差分裂可切换） + 断裂能（韧性随累积塑性退化） + PFC 能 + 取向/晶界项；自由能变分得到化学势，PFC 动力学 ∂tψ = -∇²μ。
 
+## 环境准备
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+# 可选开发工具
+pip install -r requirements-dev.txt
+```
+
 ## 代码结构（关键文件）
 - `sim/energy.py`：能量项、韧性退化、塑性/方向性驱动；支持谱分裂/体积-偏差分裂；`plastic_measures` 计算等效塑性与方向分量（机械 von Mises + PFC 梯度混合）。
 - `sim/solver.py`：交替求解器（力学 → 塑性松弛 → 裂纹 → PFC），支持方向性驱动、应力耦合 μ_extra，跟踪 stress/stress_vm、plastic_vec。
@@ -36,6 +45,21 @@ python -m sim.tests.virtual_cycle \
 
 可视化提示：
 - ParaView/Ovito 固定色标，禁用 per-timestep rescale。裂纹用 `crack_clamp03` (0–0.3) 或 `crack_norm` (0–1)；塑性/应力用 0–1；位移查看 `displacement_total`/`disp_total_norm` 或 warp by total displacement。
+
+## Phase-1 工作流（本周）
+配置化运行：
+```bash
+python sim/tests/run_virtual_cycle_config.py --config sim/configs/monotonic_baseline.yaml --dry-run
+python sim/tests/run_virtual_cycle_config.py --config sim/configs/fatigue_lowamp.yaml
+python sim/tests/run_virtual_cycle_config.py --config sim/configs/notch_gnd.yaml
+python sim/tests/run_virtual_cycle_config.py --config sim/configs/monotonic_baseline.yaml --summary-output sim/tests/runs/YYYY-MM-DD/phase1_config_runs/monotonic_baseline_run_summary.json
+```
+
+一键回归套件：
+```bash
+python sim/tests/run_phase1_suite.py --strict --out sim/tests/regress_runs/YYYY-MM-DD/phase1_suite
+```
+输出：`summary.json` + 每项 `*.stdout`/`*.stderr` + 各子测试 JSON。
 
 ## COMSOL 训练/标定（可选）
 本项目的力学、塑性与裂纹部分是自定义求解器，可用 COMSOL 作为“高保真参考”来做参数标定或对齐训练。推荐流程：
@@ -83,7 +107,7 @@ python -m sim.tests.virtual_cycle \
 ## 新增/更新内容（缺陷播种与快速演化验证）
 - 新增 `sim/defects.py`：支持缺陷播种配置（密度、区域、类型概率）、权重场引导播种、折线位错（确定性线段离散）以及各向异性核；输出缺陷掩膜 `defect_mask`/`line_mask`，将播种点平滑成 ψ/裂纹/塑性初值。
 - `Cu111StructureBuilder` 接受 `defect_config`：可用上面的播种器替代旧的随机掩膜；仍兼容原噪声/掩膜流程。
-- 示例脚本 `scripts/generate_seeded_cu.py`：可生成带播种缺陷的 Cu 初值，输出 LAMMPS data/dump 和 VTK（含 `defect_mask` 等），参数包括区域、密度、类型概率、核宽度等。
+- 示例脚本 `sim/tests/build_cu111.py`：可生成带缺陷初值的 Cu 数据，输出 LAMMPS data/dump 供可视化检查。
 - 冒烟演化脚本 `sim/tests/smoke_seeded.py`：初始化播种缺陷后跑少量步长，逐步输出 VTK 序列（含变形坐标）和末步 LAMMPS，便于 ParaView 时间序列查看。
 - 变形坐标：VTK 支持 `deform_coordinates=True`，将宏观应变+微观位移写入坐标；也会输出未变形版本便于对比。
 - 疲劳主脚本 `sim/tests/virtual_cycle.py` 增强：支持缺陷播种输入、缺口种子（notch_box）、预演化步（pre_relax）让缺陷/滑移带先成形；宏观应变包含泊松收缩 (ε, -ν ε, -ν ε)；可选应力耦合到 PFC (`stress_mu_weight`)；韧性缩放 `toughness_scale` 便于促开裂/稳健性调参；逐步 VTK/LAMMPS 输出使用一致的宏观应变。
@@ -107,11 +131,11 @@ python sim/tests/regress_bc_crack_micron.py
 
 ### 统一入口（推荐）
 ```bash
-python sim/tests/regress_all.py --strict --task boundary_crack
+python sim/tests/regress_all.py --strict --log-dir sim/tests/regress_runs/YYYY-MM-DD/boundary_crack
 ```
 
-默认日志位置（自动生成）：`sim/tests/regress_runs/YYYY-MM-DD/<task>/`  
-其中包含：`summary.json` 与每个子测试的 `*.json`/`*.stdout`/`*.stderr`。
+日志目录通过 `--log-dir` 显式指定。建议统一写到：`sim/tests/regress_runs/YYYY-MM-DD/<task>/`。  
+其中包含：`small.json`/`large.json`/`micron.json`、`*.stdout`/`*.stderr` 与汇总输出。
 
 ### 其他测试输出目录（统一命名）
 除回归外，其他测试输出默认写入：`sim/tests/runs/YYYY-MM-DD/<task>_<HHMMSS>/`  
@@ -187,3 +211,19 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
 - 晶向 × h_gnd 灵敏度（低幅循环 + notch，cycles=5，小网格）：  
   输出根目录：`sim/tests/runs/2026-02-05/gnd_orient_hgnd_sens_193218/`  
   汇总：`summary.csv`；对比图：`gnd_mean_vs_hgnd.png` / `accum_plastic_vs_hgnd.png`
+
+### 验证记录（2026-02-06，Phase-1 收口）
+- Fresh venv 验证：新建 `.venv_phase1_check` 后安装 `requirements.txt`，并执行  
+  `python sim/tests/run_phase1_suite.py --strict --out sim/tests/regress_runs/2026-02-06/phase1_suite_venvcheck`，  
+  结果 `passed=true`，汇总：`sim/tests/regress_runs/2026-02-06/phase1_suite_venvcheck/summary.json`。
+- 配置化实跑结果：
+  `monotonic_baseline`（1 周期）、`fatigue_lowamp`（稳定停止于第 5 周期）、
+  `notch_gnd`（完成 8 周期），对应汇总分别为  
+  `sim/tests/runs/2026-02-06/phase1_config_runs/monotonic_baseline_run_summary.json`、  
+  `sim/tests/runs/2026-02-06/phase1_config_runs/fatigue_lowamp_run_summary.json`、  
+  `sim/tests/runs/2026-02-06/phase1_config_runs/notch_gnd_run_summary.json`。
+- 物理映射冻结（Phase-1 统一约定）：
+  `L0=1e-6 m`、`sigma_ref=168.4 GPa`、`b_phys=2.556e-10 m`、推荐 `gnd_burgers_nd=2.556e-4`，  
+  详见 `docs/units_mapping.md` 与 `docs/parameter_register.md`。
+- 数值备注：`fatigue_lowamp` 与 `notch_gnd` 运行时有 `RuntimeWarning`（CG/梯度运算），
+  但周期汇总指标为有限值，已在 `HANDOFF.md` 标记为后续数值稳定性事项。
