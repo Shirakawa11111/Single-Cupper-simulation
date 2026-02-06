@@ -66,7 +66,9 @@ def gnd_density(alpha: Array, burgers: float = 1.0) -> Array:
     Compute GND density from Nye tensor (Frobenius norm).
     """
     burgers = max(float(burgers), 1e-12)
-    return np.sqrt(np.sum(alpha * alpha, axis=(-2, -1))) / burgers
+    sq = np.sum(alpha * alpha, axis=(-2, -1))
+    sq = np.nan_to_num(sq, nan=0.0, posinf=np.finfo(float).max, neginf=0.0)
+    return np.sqrt(np.clip(sq, 0.0, None)) / burgers
 
 
 def gnd_from_slip(

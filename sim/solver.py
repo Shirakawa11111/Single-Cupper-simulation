@@ -5,7 +5,7 @@ Alternating solver with mechanical equilibrium and spectral PFC update.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 from scipy.sparse.linalg import LinearOperator, cg
@@ -26,6 +26,10 @@ class SolverConfig:
     crack_eta: float = 0.0  # viscous regularization η_φ
     crack_tol: float = 1e-6
     crack_max_iters: int = 400
+    # Accept crack CG result when relative residual is below threshold.
+    crack_accept_rel_residual: float = 5e-3
+    # Accept finite crack CG result even when info>0 to avoid crack-update stalls.
+    crack_accept_incomplete: bool = True
     # 加载方向（用于方向性塑性耦合），默认沿 x 轴
     load_axis: int = 0
     # 方向性耦合强度：>0 时，加载方向上的塑性分量会增强裂纹驱动力
@@ -37,6 +41,8 @@ class SolverConfig:
     # Optional GND diagnostics
     gnd_active: bool = False
     gnd_burgers: float = 1.0
+    # Fail fast when non-finite values appear
+    fail_on_nonfinite: bool = True
     mechanical: MechanicalConfig = field(default_factory=MechanicalConfig)
 
 
@@ -67,6 +73,24 @@ class AlternatingSolver:
         self.mu_extra_from_stress = mu_extra_from_stress
         self.grain_mask = grain_mask
         self.state: Dict[str, Array] = {}
+        self.last_step_diagnostics: Dict[str, Any] = {}
+
+    def _check_finite(self, name: str, value: Array) -> int:
+        arr = np.asarray(value)
+        finite = np.isfinite(arr)
+        if bool(np.all(finite)):
+            return 0
+        bad = int(arr.size - np.count_nonzero(finite))
+        if self.config.fail_on_nonfinite:
+            finite_vals = arr[finite]
+            if finite_vals.size:
+                vmin = float(np.min(finite_vals))
+                vmax = float(np.max(finite_vals))
+                span = f"[{vmin:.3e}, {vmax:.3e}]"
+            else:
+                span = "[n/a, n/a]"
+            raise FloatingPointError(f"Non-finite detected in `{name}`: bad={bad}, finite_range={span}")
+        return bad
 
     def initialize_state(self, orientation_field: Array, seed: int = 0) -> None:
         self.orientation = orientation_field
@@ -121,10 +145,16 @@ class AlternatingSolver:
         gnd_density = self.state.get("gnd_density")
         displacement = self.state["displacement"]
         history = self.state["history"]
+        nonfinite_count = 0
 
         # 1. 力学求解
         displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain, plastic_strain=plastic_tensor)
+        mech_info_first = dict(getattr(self.mechanical, "last_solve_info", {}))
+        nonfinite_count += self._check_finite("displacement_after_mech_1", displacement)
+        nonfinite_count += self._check_finite("strain_after_mech_1", strain)
+        nonfinite_count += self._check_finite("stress_after_mech_1", stress)
         stress_vm = von_mises(stress)
+        nonfinite_count += self._check_finite("stress_vm_after_mech_1", stress_vm)
 
         # 2. 塑性场更新
         if gamma_s is None or chi_s is None:
@@ -159,6 +189,10 @@ class AlternatingSolver:
         plastic_inst = eps_eq * relax
         plastic_vec = np.clip(plastic_vec + relax * (eps_vec - plastic_vec), 0.0, 1.0)
         backstress = backstress * 0.0
+        nonfinite_count += self._check_finite("gamma_s", gamma_s)
+        nonfinite_count += self._check_finite("chi_s", chi_s)
+        nonfinite_count += self._check_finite("plastic_tensor", plastic_tensor)
+        nonfinite_count += self._check_finite("accum_plastic", accum_plastic)
 
         if self.config.gnd_active and not need_gnd_hardening:
             gnd_density, _ = gnd_from_slip(
@@ -170,7 +204,12 @@ class AlternatingSolver:
             )
         # Re-evaluate displacement/strain/stress with updated plastic tensor (one inner iteration)
         displacement, strain, stress = self.mechanical.solve(displacement, crack, macro_strain, plastic_strain=plastic_tensor)
+        mech_info_second = dict(getattr(self.mechanical, "last_solve_info", {}))
+        nonfinite_count += self._check_finite("displacement_after_mech_2", displacement)
+        nonfinite_count += self._check_finite("strain_after_mech_2", strain)
+        nonfinite_count += self._check_finite("stress_after_mech_2", stress)
         stress_vm = von_mises(stress)
+        nonfinite_count += self._check_finite("stress_vm_after_mech_2", stress_vm)
 
         # 3. 裂纹驱动力: 使用弹性应变 (去除塑性) 的正能量部分
         strain_el = strain - plastic_tensor
@@ -218,12 +257,27 @@ class AlternatingSolver:
         linop = LinearOperator((crack.size, crack.size), matvec=apply_crack_operator)
         phi0 = crack.reshape(-1)
         phi_vec, info = cg(linop, rhs, x0=phi0, rtol=self.config.crack_tol, atol=0.0, maxiter=self.config.crack_max_iters)
-        phi_new = crack if info != 0 else phi_vec.reshape(crack.shape)
+        crack_cg_info = int(info)
+        phi_finite = bool(np.all(np.isfinite(phi_vec)))
+        crack_cg_rel_res = float("inf")
+        if phi_finite:
+            res = linop.matvec(phi_vec) - rhs
+            crack_cg_rel_res = float(np.linalg.norm(res) / (np.linalg.norm(rhs) + 1e-16))
+        crack_cg_accepted = bool(
+            phi_finite
+            and (
+                crack_cg_info == 0
+                or crack_cg_rel_res <= self.config.crack_accept_rel_residual
+                or (self.config.crack_accept_incomplete and crack_cg_info > 0)
+            )
+        )
+        phi_new = phi_vec.reshape(crack.shape) if crack_cg_accepted else crack
         # Irreversibility and bounds
         phi_new = np.maximum(phi_new, crack)
         phi_new = np.clip(phi_new, 0.0, 1.0)
         omega = np.clip(self.config.crack_relax, 0.0, 1.0)
         crack = (1.0 - omega) * crack + omega * phi_new
+        nonfinite_count += self._check_finite("crack_after_update", crack)
 
         # 5. PFC 演化 (【关键】传入宏观应变)
         if self.config.pfc_active:
@@ -234,6 +288,7 @@ class AlternatingSolver:
                 self.pfc.extra_mu = lambda psi: extra_mu
             psi = self.pfc.step(psi)
             psi = self.coupling.constraint.project(psi)
+        nonfinite_count += self._check_finite("psi_after_step", psi)
 
         self.state.update(
             {
@@ -255,6 +310,38 @@ class AlternatingSolver:
                 "stress_vm": stress_vm,
             }
         )
+        mech_failures = int(mech_info_first.get("cg_failures", 0)) + int(mech_info_second.get("cg_failures", 0))
+        mech_first_info = int(mech_info_first.get("last_cg_info", 0))
+        mech_second_info = int(mech_info_second.get("last_cg_info", 0))
+        mech_warning_count = int(mech_info_first.get("runtime_warning_count", 0)) + int(
+            mech_info_second.get("runtime_warning_count", 0)
+        )
+        self.last_step_diagnostics = {
+            "mechanical_cg_failures": mech_failures,
+            "mechanical_first_cg_info": mech_first_info,
+            "mechanical_second_cg_info": mech_second_info,
+            "mechanical_last_cg_info": mech_second_info,
+            "mechanical_outer_converged": bool(
+                mech_info_first.get("outer_converged", True) and mech_info_second.get("outer_converged", True)
+            ),
+            "mechanical_runtime_warning_count": mech_warning_count,
+            "mechanical_gmres_fallback_used": bool(
+                mech_info_first.get("gmres_fallback_used", False) or mech_info_second.get("gmres_fallback_used", False)
+            ),
+            "mechanical_last_solver_used": str(mech_info_second.get("solver_used", mech_info_first.get("solver_used", "cg"))),
+            "mechanical_last_rel_residual": float(
+                mech_info_second.get("rel_residual", mech_info_first.get("rel_residual", 0.0))
+            ),
+            "mechanical_last_accepted": bool(mech_info_second.get("accepted", mech_info_first.get("accepted", True))),
+            "crack_cg_info": crack_cg_info,
+            "crack_cg_converged": crack_cg_info == 0,
+            "crack_cg_rel_residual": crack_cg_rel_res,
+            "crack_cg_accepted": crack_cg_accepted,
+            "nonfinite_count": nonfinite_count,
+            "max_abs_stress_vm": float(np.max(np.abs(stress_vm))),
+            "max_crack": float(np.max(crack)),
+            "max_abs_displacement": float(np.max(np.abs(displacement))),
+        }
         total_E = self.energy.total_energy(
             strain,
             crack,

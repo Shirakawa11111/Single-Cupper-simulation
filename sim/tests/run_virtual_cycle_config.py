@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
+import traceback
+import warnings
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +39,30 @@ TUPLE_KEYS = {
     "grid_periodic",
     "stable_metrics",
 }
+
+
+def _is_finite_tree(value: Any) -> bool:
+    if isinstance(value, dict):
+        return all(_is_finite_tree(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return all(_is_finite_tree(v) for v in value)
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)):
+        return math.isfinite(float(value))
+    return True
+
+
+def _runtime_warning_counts(caught: list[warnings.WarningMessage]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in caught:
+        if not issubclass(item.category, RuntimeWarning):
+            continue
+        msg = str(item.message)
+        src = f"{Path(item.filename).name}:{item.lineno}"
+        key = f"{src} | {item.category.__name__}: {msg}"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def _to_builtin(value: Any) -> Any:
@@ -96,6 +123,35 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True, help="YAML config path.")
     parser.add_argument("--summary-output", type=Path, default=None, help="Optional summary JSON output path.")
     parser.add_argument("--dry-run", action="store_true", help="Print resolved kwargs and exit.")
+    parser.add_argument(
+        "--max-runtime-warnings",
+        type=int,
+        default=None,
+        help="Fail run when RuntimeWarning count exceeds this threshold.",
+    )
+    parser.add_argument(
+        "--allow-nonfinite-last-cycle",
+        action="store_true",
+        help="Do not fail when last_cycle contains NaN/Inf.",
+    )
+    parser.add_argument(
+        "--max-mechanical-cg-failures",
+        type=int,
+        default=None,
+        help="Fail when stability_diagnostics.mechanical_cg_failures exceeds this threshold.",
+    )
+    parser.add_argument(
+        "--max-crack-cg-nonconverged-steps",
+        type=int,
+        default=None,
+        help="Fail when stability_diagnostics.crack_cg_nonconverged_steps exceeds this threshold.",
+    )
+    parser.add_argument(
+        "--max-nonfinite-count",
+        type=int,
+        default=0,
+        help="Fail when stability_diagnostics.nonfinite_count exceeds this threshold.",
+    )
     args = parser.parse_args()
 
     raw = yaml.safe_load(args.config.read_text(encoding="utf-8"))
@@ -110,10 +166,65 @@ def main() -> int:
         return 0
 
     t0 = datetime.now()
-    results, paris_coeff, coffman = run_virtual_cycles(**cfg)
+    run_cfg = dict(cfg)
+    run_cfg.pop("diagnostics_out", None)
+    diagnostics: dict[str, float | int | bool] = {}
+    results = []
+    paris_coeff = 0.0
+    coffman = 0.0
+    error: dict[str, Any] | None = None
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        try:
+            results, paris_coeff, coffman = run_virtual_cycles(**run_cfg, diagnostics_out=diagnostics)
+        except Exception as exc:  # pragma: no cover - defensive summary path
+            error = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc().splitlines()[-12:],
+            }
+        warning_counts = _runtime_warning_counts(caught)
     t1 = datetime.now()
 
     last = results[-1] if results else None
+    last_cycle = None if last is None else _to_builtin(last.__dict__)
+    last_cycle_finite = True if last_cycle is None else _is_finite_tree(last_cycle)
+    diagnostics_finite = _is_finite_tree(diagnostics)
+    runtime_warning_count = int(sum(warning_counts.values()))
+    warning_items = [
+        {"message": msg, "count": cnt}
+        for msg, cnt in sorted(warning_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    failure_reasons: list[str] = []
+    if error is not None:
+        failure_reasons.append("runtime_exception")
+    if not args.allow_nonfinite_last_cycle and not last_cycle_finite:
+        failure_reasons.append("last_cycle_nonfinite")
+    if not diagnostics_finite:
+        failure_reasons.append("diagnostics_nonfinite")
+    if args.max_runtime_warnings is not None and runtime_warning_count > args.max_runtime_warnings:
+        failure_reasons.append(
+            f"runtime_warning_count_exceeded({runtime_warning_count}>{args.max_runtime_warnings})"
+        )
+    mech_cg_failures = int(diagnostics.get("mechanical_cg_failures", 0))
+    crack_cg_nonconverged_steps = int(diagnostics.get("crack_cg_nonconverged_steps", 0))
+    nonfinite_count = int(diagnostics.get("nonfinite_count", 0))
+    if args.max_mechanical_cg_failures is not None and mech_cg_failures > args.max_mechanical_cg_failures:
+        failure_reasons.append(
+            f"mechanical_cg_failures_exceeded({mech_cg_failures}>{args.max_mechanical_cg_failures})"
+        )
+    if (
+        args.max_crack_cg_nonconverged_steps is not None
+        and crack_cg_nonconverged_steps > args.max_crack_cg_nonconverged_steps
+    ):
+        failure_reasons.append(
+            "crack_cg_nonconverged_steps_exceeded("
+            f"{crack_cg_nonconverged_steps}>{args.max_crack_cg_nonconverged_steps})"
+        )
+    if nonfinite_count > args.max_nonfinite_count:
+        failure_reasons.append(f"nonfinite_count_exceeded({nonfinite_count}>{args.max_nonfinite_count})")
+    passed = len(failure_reasons) == 0
+
     summary = {
         "config_path": str(args.config),
         "started_at": t0.isoformat(timespec="seconds"),
@@ -121,10 +232,26 @@ def main() -> int:
         "duration_s": (t1 - t0).total_seconds(),
         "meta": _to_builtin(meta),
         "config": _to_builtin(cfg),
+        "passed": passed,
+        "failure_reasons": failure_reasons,
+        "error": error,
+        "runtime_warning_count": runtime_warning_count,
+        "runtime_warning_items": warning_items,
+        "limits": {
+            "max_runtime_warnings": args.max_runtime_warnings,
+            "max_mechanical_cg_failures": args.max_mechanical_cg_failures,
+            "max_crack_cg_nonconverged_steps": args.max_crack_cg_nonconverged_steps,
+            "max_nonfinite_count": args.max_nonfinite_count,
+        },
+        "stability_diagnostics": _to_builtin(diagnostics),
+        "checks": {
+            "last_cycle_finite": last_cycle_finite,
+            "diagnostics_finite": diagnostics_finite,
+        },
         "cycles_completed": len(results),
-        "paris_coeff": float(paris_coeff),
-        "coffman_coeff": float(coffman),
-        "last_cycle": None if last is None else _to_builtin(last.__dict__),
+        "paris_coeff": float(paris_coeff) if math.isfinite(float(paris_coeff)) else None,
+        "coffman_coeff": float(coffman) if math.isfinite(float(coffman)) else None,
+        "last_cycle": last_cycle,
     }
 
     out_dir = _resolve_summary_dir(cfg)
@@ -141,7 +268,7 @@ def main() -> int:
     summary["summary_path"] = str(summary_path)
 
     print(json.dumps(summary, indent=2))
-    return 0
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

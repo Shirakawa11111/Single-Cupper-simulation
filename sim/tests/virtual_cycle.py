@@ -113,12 +113,20 @@ def run_virtual_cycles(
     mech_tol: float | None = None,          # 机械求解收敛阈值
     mech_outer_max_iters: int | None = None, # 单向分裂外循环
     mech_outer_tol: float | None = None,    # 单向分裂外循环阈值
+    mech_regularization: float | None = None, # 机械求解线性正则
+    mech_accept_rel_residual: float | None = None, # 迭代残差验收阈值
+    mech_accept_incomplete_cg: bool | None = None, # 是否接受 info>0 的有限 CG 解
+    mech_enable_gmres_fallback: bool | None = None, # 是否启用 GMRES 回退
+    mech_gmres_restart: int | None = None,  # GMRES restart
+    mech_gmres_maxiter: int | None = None,  # GMRES maxiter
+    mech_solution_abs_limit: float | None = None, # 迭代解绝对值上限
     run_dir: Path | None = None,            # 输出根目录（默认按日期/任务自动生成）
     task: str = "virtual_cycle",            # 任务标签（用于命名输出目录）
     auto_output: bool = False,              # 若 True 且 run_dir 提供/默认，则自动填充输出文件
     pfc_active: bool = True,                # 是否演化 PFC
     gnd_active: bool = False,               # 是否输出 GND 诊断
     gnd_burgers: float = 1.0,               # Burgers 向量尺度（无量纲）
+    diagnostics_out: dict[str, float | int | bool] | None = None,  # 可选：回填数值稳定诊断
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 输出目录解析
@@ -189,6 +197,20 @@ def run_virtual_cycles(
         mech_cfg.outer_max_iters = mech_outer_max_iters
     if mech_outer_tol is not None:
         mech_cfg.outer_tol = mech_outer_tol
+    if mech_regularization is not None:
+        mech_cfg.regularization = mech_regularization
+    if mech_accept_rel_residual is not None:
+        mech_cfg.accept_rel_residual = mech_accept_rel_residual
+    if mech_accept_incomplete_cg is not None:
+        mech_cfg.accept_incomplete_cg = mech_accept_incomplete_cg
+    if mech_enable_gmres_fallback is not None:
+        mech_cfg.enable_gmres_fallback = mech_enable_gmres_fallback
+    if mech_gmres_restart is not None:
+        mech_cfg.gmres_restart = mech_gmres_restart
+    if mech_gmres_maxiter is not None:
+        mech_cfg.gmres_maxiter = mech_gmres_maxiter
+    if mech_solution_abs_limit is not None:
+        mech_cfg.solution_abs_limit = mech_solution_abs_limit
 
     builder = Cu111StructureBuilder(
         grid,
@@ -306,6 +328,23 @@ def run_virtual_cycles(
     current_strain = 0.0
     frame_id = 0
     stress_strain_log = []
+    solver_diag = {
+        "step_count": 0,
+        "mechanical_cg_failures": 0,
+        "mechanical_runtime_warning_count": 0,
+        "mechanical_nonzero_info_steps": 0,
+        "mechanical_outer_not_converged_steps": 0,
+        "mechanical_breakdown_steps": 0,
+        "mechanical_positive_info_steps": 0,
+        "mechanical_gmres_fallback_steps": 0,
+        "mechanical_not_accepted_steps": 0,
+        "crack_cg_nonconverged_steps": 0,
+        "crack_cg_not_accepted_steps": 0,
+        "nonfinite_count": 0,
+        "max_abs_stress_vm": 0.0,
+        "max_crack": 0.0,
+        "max_abs_displacement": 0.0,
+    }
 
     # 2. 循环加载
     min_strain = -max_strain if min_strain is None else min_strain
@@ -333,6 +372,42 @@ def run_virtual_cycles(
                 current_strain = target_start + (target_end - target_start) * alpha
                 macro = (current_strain, -poisson_ratio * current_strain, -poisson_ratio * current_strain)
                 energy_val = solver.step(macro)
+                step_diag = getattr(solver, "last_step_diagnostics", {})
+                solver_diag["step_count"] += 1
+                solver_diag["mechanical_cg_failures"] += int(step_diag.get("mechanical_cg_failures", 0))
+                solver_diag["mechanical_runtime_warning_count"] += int(
+                    step_diag.get("mechanical_runtime_warning_count", 0)
+                )
+                mech_last_info = int(step_diag.get("mechanical_last_cg_info", 0))
+                if mech_last_info != 0:
+                    solver_diag["mechanical_nonzero_info_steps"] += 1
+                if mech_last_info < 0:
+                    solver_diag["mechanical_breakdown_steps"] += 1
+                if mech_last_info > 0:
+                    solver_diag["mechanical_positive_info_steps"] += 1
+                if bool(step_diag.get("mechanical_gmres_fallback_used", False)):
+                    solver_diag["mechanical_gmres_fallback_steps"] += 1
+                if not bool(step_diag.get("mechanical_last_accepted", True)):
+                    solver_diag["mechanical_not_accepted_steps"] += 1
+                if not bool(step_diag.get("mechanical_outer_converged", True)):
+                    solver_diag["mechanical_outer_not_converged_steps"] += 1
+                if int(step_diag.get("crack_cg_info", 0)) != 0:
+                    solver_diag["crack_cg_nonconverged_steps"] += 1
+                if not bool(step_diag.get("crack_cg_accepted", True)):
+                    solver_diag["crack_cg_not_accepted_steps"] += 1
+                solver_diag["nonfinite_count"] += int(step_diag.get("nonfinite_count", 0))
+                solver_diag["max_abs_stress_vm"] = max(
+                    float(solver_diag["max_abs_stress_vm"]),
+                    float(step_diag.get("max_abs_stress_vm", 0.0)),
+                )
+                solver_diag["max_crack"] = max(
+                    float(solver_diag["max_crack"]),
+                    float(step_diag.get("max_crack", 0.0)),
+                )
+                solver_diag["max_abs_displacement"] = max(
+                    float(solver_diag["max_abs_displacement"]),
+                    float(step_diag.get("max_abs_displacement", 0.0)),
+                )
                 plast_inst = solver.state.get("plastic_inst", solver.state["plastic"])
                 plast_inst_mean = plast_inst.mean()
                 accum_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
@@ -540,6 +615,28 @@ def run_virtual_cycles(
     if data_output:
         data_output.parent.mkdir(parents=True, exist_ok=True)
         write_atomic_data(data_output, grid)
+
+    if diagnostics_out is not None:
+        diagnostics_out.clear()
+        diagnostics_out.update(
+            {
+                "steps": int(solver_diag["step_count"]),
+                "mechanical_cg_failures": int(solver_diag["mechanical_cg_failures"]),
+                "mechanical_runtime_warning_count": int(solver_diag["mechanical_runtime_warning_count"]),
+                "mechanical_nonzero_info_steps": int(solver_diag["mechanical_nonzero_info_steps"]),
+                "mechanical_outer_not_converged_steps": int(solver_diag["mechanical_outer_not_converged_steps"]),
+                "mechanical_breakdown_steps": int(solver_diag["mechanical_breakdown_steps"]),
+                "mechanical_positive_info_steps": int(solver_diag["mechanical_positive_info_steps"]),
+                "mechanical_gmres_fallback_steps": int(solver_diag["mechanical_gmres_fallback_steps"]),
+                "mechanical_not_accepted_steps": int(solver_diag["mechanical_not_accepted_steps"]),
+                "crack_cg_nonconverged_steps": int(solver_diag["crack_cg_nonconverged_steps"]),
+                "crack_cg_not_accepted_steps": int(solver_diag["crack_cg_not_accepted_steps"]),
+                "nonfinite_count": int(solver_diag["nonfinite_count"]),
+                "max_abs_stress_vm": float(solver_diag["max_abs_stress_vm"]),
+                "max_crack": float(solver_diag["max_crack"]),
+                "max_abs_displacement": float(solver_diag["max_abs_displacement"]),
+            }
+        )
 
     return results, paris_coeff, coffman
 

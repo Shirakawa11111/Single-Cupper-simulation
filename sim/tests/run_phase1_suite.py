@@ -29,6 +29,8 @@ class TaskResult:
     duration_s: float
     passed: bool
     output_json: str
+    runtime_warning_count: int
+    runtime_warning_items: list[dict[str, Any]]
     failures: dict[str, Any]
 
 
@@ -55,8 +57,20 @@ def _run_task(name: str, cmd: list[str], output_json: Path) -> TaskResult:
     report = _read_json(output_json)
     passed = proc.returncode == 0 and bool(report is not None and report.get("passed", True))
     failures = {}
+    runtime_warning_count = proc.stdout.count("RuntimeWarning") + proc.stderr.count("RuntimeWarning")
+    runtime_warning_items: list[dict[str, Any]] = []
     if report is not None:
         failures = report.get("failures", {}) if isinstance(report.get("failures", {}), dict) else {}
+        report_warn = report.get("runtime_warning_count")
+        if isinstance(report_warn, int):
+            runtime_warning_count = max(runtime_warning_count, int(report_warn))
+        raw_items = report.get("runtime_warning_items")
+        if isinstance(raw_items, list):
+            runtime_warning_items = [
+                {"message": str(item.get("message", "")), "count": int(item.get("count", 0))}
+                for item in raw_items
+                if isinstance(item, dict)
+            ]
     if proc.returncode != 0 and not failures:
         failures = {"runner": f"returncode={proc.returncode}"}
 
@@ -67,6 +81,8 @@ def _run_task(name: str, cmd: list[str], output_json: Path) -> TaskResult:
         duration_s=dur,
         passed=passed,
         output_json=str(output_json),
+        runtime_warning_count=runtime_warning_count,
+        runtime_warning_items=runtime_warning_items,
         failures=failures,
     )
 
@@ -76,6 +92,12 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=None, help="Output directory for logs and summary.")
     parser.add_argument("--strict", action="store_true", help="Enable strict mode for boundary_crack regression.")
     parser.add_argument("--python", type=str, default=sys.executable, help="Python executable path.")
+    parser.add_argument(
+        "--max-runtime-warnings",
+        type=int,
+        default=None,
+        help="Fail suite when total RuntimeWarning count exceeds this threshold.",
+    )
     args = parser.parse_args()
 
     out_dir = args.out or _default_out_dir()
@@ -121,13 +143,23 @@ def main() -> int:
 
     finished_at = datetime.now()
     passed = all(t.passed for t in task_results)
+    total_runtime_warnings = int(sum(t.runtime_warning_count for t in task_results))
+    failure_reasons: list[str] = []
+    if args.max_runtime_warnings is not None and total_runtime_warnings > args.max_runtime_warnings:
+        passed = False
+        failure_reasons.append(
+            f"runtime_warning_count_exceeded({total_runtime_warnings}>{args.max_runtime_warnings})"
+        )
 
     summary = {
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": finished_at.isoformat(timespec="seconds"),
         "duration_s": (finished_at - started_at).total_seconds(),
         "strict": args.strict,
+        "max_runtime_warnings": args.max_runtime_warnings,
+        "total_runtime_warning_count": total_runtime_warnings,
         "passed": passed,
+        "failure_reasons": failure_reasons,
         "tasks": [
             {
                 "name": t.name,
@@ -136,6 +168,8 @@ def main() -> int:
                 "duration_s": t.duration_s,
                 "passed": t.passed,
                 "output_json": t.output_json,
+                "runtime_warning_count": t.runtime_warning_count,
+                "runtime_warning_items": t.runtime_warning_items,
                 "failures": t.failures,
             }
             for t in task_results

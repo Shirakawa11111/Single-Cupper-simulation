@@ -61,6 +61,46 @@ python sim/tests/run_phase1_suite.py --strict --out sim/tests/regress_runs/YYYY-
 ```
 输出：`summary.json` + 每项 `*.stdout`/`*.stderr` + 各子测试 JSON。
 
+## Phase-2 工作流（稳定性 + 裂纹萌生）
+单配置稳定性检查（带阈值）：
+```bash
+python sim/tests/run_virtual_cycle_config.py \
+  --config sim/configs/monotonic_baseline.yaml \
+  --max-runtime-warnings 20 \
+  --max-crack-cg-nonconverged-steps 0 \
+  --max-nonfinite-count 0
+```
+
+裂纹萌生扫描：
+```bash
+python sim/tests/scan_crack_onset.py \
+  --config sim/configs/crack_onset_scan.yaml \
+  --max-runtime-warnings 20
+```
+
+Phase-2 门禁（推荐）：
+```bash
+python sim/tests/regress_phase2.py \
+  --strict \
+  --max-runtime-warnings 20 \
+  --scan-config sim/configs/crack_onset_scan.yaml
+```
+
+快速烟测（小网格，开发时）：
+```bash
+python sim/tests/regress_phase2.py \
+  --skip-phase1-suite \
+  --scan-config sim/configs/crack_onset_scan_quick.yaml \
+  --scan-max-cases 1 \
+  --scan-min-onset-cases 0 \
+  --max-runtime-warnings 200
+```
+
+说明：
+- `run_virtual_cycle_config.py` 现会输出 `runtime_warning_count`、`runtime_warning_items` 与 `stability_diagnostics`（含 mechanical/crack CG 与 nonfinite 计数）。
+- `scan_crack_onset.py` 会输出 `summary.json` + `summary.csv`，用于筛选可触发裂纹增长的候选工况。
+- 标定闭环执行模板见 `docs/calibration_phase2.md`。
+
 ## COMSOL 训练/标定（可选）
 本项目的力学、塑性与裂纹部分是自定义求解器，可用 COMSOL 作为“高保真参考”来做参数标定或对齐训练。推荐流程：
 
@@ -227,3 +267,26 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   详见 `docs/units_mapping.md` 与 `docs/parameter_register.md`。
 - 数值备注：`fatigue_lowamp` 与 `notch_gnd` 运行时有 `RuntimeWarning`（CG/梯度运算），
   但周期汇总指标为有限值，已在 `HANDOFF.md` 标记为后续数值稳定性事项。
+
+### 验证记录（2026-02-06，Phase-2 快速烟测）
+- 稳定性单配置检查（monotonic）：
+  `sim/tests/regress_runs/2026-02-06/monotonic_stability_check_summary.json`  
+  结果：`passed=true`，`runtime_warning_count=0`，`nonfinite_count=0`。
+- 裂纹萌生扫描快速配置：
+  `python sim/tests/scan_crack_onset.py --config sim/configs/crack_onset_scan_quick.yaml`  
+  输出：`sim/tests/regress_runs/2026-02-06/crack_onset_scan_quick_smoke/summary.json`（passed）。
+- Phase-2 快速门禁（跳过完整 Phase-1 套件）：
+  `sim/tests/regress_runs/2026-02-06/phase2_gate_quickcheck/summary.json`  
+  结果：`passed=true`。
+
+### 验证记录（2026-02-06，Phase-2 阈值锁定）
+- 全量裂纹萌生扫描（4 cases）：
+  `sim/tests/regress_runs/2026-02-06/crack_onset_scan_full_locked/summary.json`  
+  结果：`passed=true`，`onset_cases=3/4`，`runtime_warning_count=0`（全部 case）。
+- 锁定扫描阈值（`sim/configs/crack_onset_scan.yaml`）：
+  - `min_onset_cases=1`
+  - `max_runtime_warnings=50`
+  - `min_crack_mean_delta=5.0e-4`
+- 机械/裂纹求解稳定性策略（本轮）：
+  - 机械：CG 残差验收 + 正则 + 解幅值上限 + 可选 GMRES 回退。
+  - 裂纹：允许接受有限的非零 `crack_cg_info` 结果，避免裂纹更新冻结。

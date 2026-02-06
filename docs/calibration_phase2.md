@@ -1,0 +1,52 @@
+# Phase-2 Calibration Loop (SI/Experiment Alignment)
+
+## Objective
+- Freeze a reproducible loop from experiment -> nondimensional fit -> SI report:
+  - cyclic hysteresis shape (`sigma_xx` vs `epsilon`)
+  - crack-onset indicator (`crack_mean` / `crack_length`)
+  - slip/GND trend (`accum_plastic_mean`, `gnd_mean`)
+
+## Inputs (Required)
+- Experimental CSV with columns:
+  - `cycle`
+  - `eps_axial` (strain, SI)
+  - `sig_axial_MPa` (stress, SI)
+- Crystal orientation and loading axis.
+- Baseline units from `docs/units_mapping.md`.
+
+## Parameter Groups
+- Elastic:
+  - `CopperParameters.c11/c12/c44`
+- Plastic/slip:
+  - `yield_tau`, `gamma0`, `slip_exponent`, `h_iso`, `h_gnd`
+- Fracture:
+  - `toughness_scale`, `gc`, `l0`, `epsilon_half`, `gres`
+- Solver numerics:
+  - `mech_max_iters`, `mech_tol`, `mech_outer_max_iters`, `mech_outer_tol`
+
+## Execution Steps
+1. Run baseline gate (must pass before fitting):
+```bash
+python sim/tests/regress_phase2.py --strict
+```
+2. Select candidate load path and run config:
+```bash
+python sim/tests/run_virtual_cycle_config.py \
+  --config sim/configs/fatigue_lowamp.yaml \
+  --max-runtime-warnings 20
+```
+3. Compare simulation curve (`virtual_cycle_stress_strain.csv`) with experiment:
+- Match small-strain slope first.
+- Then match loop width (`plastic_range`) and RSS peak trend.
+4. Run crack-onset screening after each parameter update:
+```bash
+python sim/tests/scan_crack_onset.py --config sim/configs/crack_onset_scan.yaml
+```
+5. Record accepted set in `docs/parameter_register.md`:
+- add date, commit hash, config path, and fit notes.
+
+## Acceptance Criteria (Phase-2)
+- `regress_phase2.py` passes.
+- RuntimeWarning counts under configured thresholds.
+- At least 1 crack-onset case from `scan_crack_onset.py`.
+- Experimental overlay mismatch reduced and documented with plots/metrics.
