@@ -118,7 +118,7 @@ Numerical notes
     - `max_runtime_warnings=50`
     - `max_mechanical_cg_failures=1300`
     - `max_mechanical_not_accepted_steps=160` (current config target)
-    - `max_crack_cg_nonconverged_steps=320`
+    - `max_crack_cg_nonconverged_steps=80` (current config target)
     - `max_nonfinite_count=0`
 - Unilateral 分支预条件/算子替换实验（2026-02-06）:
   - baseline matrix (`unilateral_matrix_l10`): `spectral/volumetric × none/jacobi` 均 `mechanical_not_accepted_steps=320`.
@@ -126,8 +126,18 @@ Numerical notes
     - single-case 320-step: `crack_onset_aggressive_clip_320` => `mechanical_not_accepted_steps=0`
     - full 4-case scan: `crack_onset_scan_clip_full` => all cases `mechanical_not_accepted_steps=0`
     - scan criteria with `max_mechanical_not_accepted_steps=160` passes.
+- 降裁剪率专项（2026-02-07）:
+  - strengthened regularization strategy (`mech_regularization=1.0`) now used in:
+    - `sim/configs/crack_onset_scan.yaml`
+    - `sim/configs/crack_onset_aggressive_only.yaml`
+    - `sim/configs/crack_onset_scan_quick.yaml`
+  - full scan verification:
+    - `sim/tests/regress_runs/2026-02-07/crack_onset_scan_full_v5_reg1/summary.json`
+    - notch cases: `mechanical_solution_clipped_steps=118/117/120` with `steps=160`
+    - all cases: `mechanical_not_accepted_steps=0`
+    - notch cases: `crack_cg_nonconverged_steps=52/42/40` (under tightened threshold 80)
 - Residual risk:
-  - notch cases show high `mechanical_solution_clipped_steps` (close to full-step clipping).
+  - notch cases still show non-trivial clipping ratio (~74%-75% of simulated steps).
   - next numerical target is reducing clipping dependency while keeping `max_mechanical_not_accepted_steps<160`.
 
 Open decisions / next steps
@@ -143,7 +153,7 @@ Open decisions / next steps
   - if needed, add preconditioner/regularization or solver fallback for unilateral branch.
 - Continue tightening Phase-2 thresholds after solver improvements:
   - keep `max_mechanical_not_accepted_steps=160` stable while reducing `mechanical_solution_clipped_steps`
-  - lower `max_crack_cg_nonconverged_steps`
+  - lower `max_crack_cg_nonconverged_steps` further from current `80` when crack operator convergence is improved.
 
 Notes
 - accum_plastic is currently sum|gamma_s|; eps_eq can stay as output-only.

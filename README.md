@@ -78,7 +78,7 @@ python sim/tests/scan_crack_onset.py \
   --config sim/configs/crack_onset_scan.yaml \
   --max-runtime-warnings 50 \
   --max-mechanical-not-accepted-steps 160 \
-  --max-crack-cg-nonconverged-steps 320 \
+  --max-crack-cg-nonconverged-steps 80 \
   --max-nonfinite-count 0
 ```
 
@@ -88,7 +88,7 @@ python sim/tests/regress_phase2.py \
   --strict \
   --max-runtime-warnings 50 \
   --max-mechanical-not-accepted-steps 160 \
-  --max-crack-cg-nonconverged-steps 320 \
+  --max-crack-cg-nonconverged-steps 80 \
   --scan-config sim/configs/crack_onset_scan.yaml
 ```
 
@@ -307,10 +307,10 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   - `min_crack_delta=5.0e-2`（长度主判据）
   - `allow_mean_aux=true` + `min_crack_length_for_mean_aux=1.0e-1`
   - `max_mechanical_not_accepted_steps=160`
-  - `max_crack_cg_nonconverged_steps=320`
+  - `max_crack_cg_nonconverged_steps=80`
   - `max_runtime_warnings=50`
 - 结果解读：
-  - notch 三个 case：`onset_length=true`
+  - notch 三个 case：在 `reg=1e-4` 基线下 `onset_length=true`；在新 `reg=1.0` 配置下更偏 `onset_mean_aux=true`（长度很快饱和）。
   - no-notch 对照：`onset=false` 且 `checks_ok=true`（作为负对照保留）
 
 ### 验证记录（2026-02-06，unilateral 分支预条件/算子替换）
@@ -323,3 +323,13 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   - 全扫描 4 cases：`sim/tests/regress_runs/2026-02-06/crack_onset_scan_clip_full/summary.json`
     - 四个 case 均 `mech_not_accepted_steps=0`，满足 `<160` 目标。
 - 备注：notch case 中 `mechanical_solution_clipped_steps` 较高，后续应继续压低裁剪依赖（通过更稳健线性算子/预条件组合）。
+
+### 验证记录（2026-02-07，降裁剪率 + 裂纹 CG 阈值收紧）
+- 机械裁剪率专项：
+  - 代理筛选表明 `mech_regularization=1.0` 才能明显降低裁剪依赖（同样 `limit=10`、`clip=true` 条件下）。
+  - 正式全扫描：`sim/tests/regress_runs/2026-02-07/crack_onset_scan_full_v5_reg1/summary.json`
+    - notch 三 case：`mechanical_solution_clipped_steps=118/117/120`（对应 `steps=160`）
+    - `mechanical_not_accepted_steps=0`（全部 case，保持 `<160`）
+- 裂纹 CG 阈值收紧：
+  - 将 `max_crack_cg_nonconverged_steps` 从 `320` 收紧到 `80`。
+  - 同一全扫描中 notch 三 case 分别为 `52/42/40`，满足收紧阈值。

@@ -23,7 +23,7 @@ defaults:
     mech_outer_max_iters: 2
     mech_tol: 5.0e-5
     mech_outer_tol: 5.0e-6
-    mech_regularization: 1.0e-4
+    mech_regularization: 1.0
     mech_accept_rel_residual: 1.0e-2
     mech_accept_incomplete_cg: true
     mech_enable_gmres_fallback: false
@@ -39,6 +39,7 @@ defaults:
     min_onset_cases: 0
     max_runtime_warnings: 200
     max_mechanical_not_accepted_steps: 48
+    max_crack_cg_nonconverged_steps: 12
     max_nonfinite_count: 0
 
 cases:
