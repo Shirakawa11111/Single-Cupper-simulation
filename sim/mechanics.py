@@ -5,7 +5,7 @@ Mechanical equilibrium solver for anisotropic elasticity.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple, Literal
+from typing import Tuple, Literal, Callable
 
 import numpy as np
 import warnings
@@ -82,6 +82,10 @@ class MechanicalConfig:
     enable_gmres_fallback: bool = False
     gmres_restart: int = 40
     gmres_maxiter: int = 60
+    # Optional linear preconditioner for iterative solves.
+    preconditioner: Literal["none", "jacobi"] = "none"
+    preconditioner_floor: float = 1e-5
+    preconditioner_g_min: float = 5e-2
 
 
 class MechanicalEquilibriumSolver:
@@ -120,13 +124,30 @@ class MechanicalEquilibriumSolver:
         }
 
     @staticmethod
+    def _safe_l2_norm(vec: np.ndarray) -> float:
+        arr = np.asarray(vec, dtype=float)
+        if arr.size == 0:
+            return 0.0
+        arr = np.nan_to_num(arr, nan=0.0, posinf=1.0e200, neginf=-1.0e200)
+        max_abs = float(np.max(np.abs(arr)))
+        if (not np.isfinite(max_abs)) or max_abs == 0.0:
+            return 0.0 if max_abs == 0.0 else float("inf")
+        scaled = arr / max_abs
+        nrm = max_abs * float(np.linalg.norm(scaled))
+        return nrm if np.isfinite(nrm) else float("inf")
+
+    @staticmethod
     def _relative_residual(linop: LinearOperator, x: np.ndarray, b: np.ndarray) -> float:
-        ax = linop.matvec(x)
-        if not np.all(np.isfinite(ax)):
-            return float("inf")
-        res = ax - b
-        num = float(np.linalg.norm(res))
-        den = float(np.linalg.norm(b)) + 1e-16
+        ax = np.nan_to_num(
+            linop.matvec(x),
+            nan=0.0,
+            posinf=1.0e200,
+            neginf=-1.0e200,
+        )
+        b_safe = np.nan_to_num(b, nan=0.0, posinf=1.0e200, neginf=-1.0e200)
+        res = ax - b_safe
+        num = MechanicalEquilibriumSolver._safe_l2_norm(res)
+        den = MechanicalEquilibriumSolver._safe_l2_norm(b_safe) + 1e-16
         if not np.isfinite(num):
             return float("inf")
         return num / den
@@ -141,10 +162,14 @@ class MechanicalEquilibriumSolver:
         linop: LinearOperator,
         rhs: np.ndarray,
         x0: np.ndarray,
+        sanitize: Callable[[np.ndarray], np.ndarray] | None = None,
+        preconditioner: LinearOperator | None = None,
     ) -> tuple[np.ndarray, int, float, int, str, bool]:
-        rhs_norm = float(np.linalg.norm(rhs))
+        sanitize_fn = sanitize or (lambda v: v)
+        x0_eval = sanitize_fn(np.nan_to_num(x0.copy(), nan=0.0, posinf=0.0, neginf=0.0))
+        rhs_norm = self._safe_l2_norm(rhs)
         if (not np.isfinite(rhs_norm)) or rhs_norm < 1e-14:
-            return x0.copy(), 0, 0.0, 0, "rhs_skip", True
+            return x0_eval, 0, 0.0, 0, "rhs_skip", True
 
         warn_count = 0
         with warnings.catch_warnings(record=True) as caught:
@@ -152,17 +177,19 @@ class MechanicalEquilibriumSolver:
             x_cg, info_cg = cg(
                 linop,
                 rhs,
-                x0=x0,
+                x0=x0_eval,
                 rtol=self.config.tol,
                 atol=0.0,
                 maxiter=self.config.max_iters,
+                M=preconditioner,
             )
         warn_count += int(sum(1 for w in caught if issubclass(w.category, RuntimeWarning)))
 
-        cg_finite = bool(np.all(np.isfinite(x_cg)))
+        x_cg_eval = sanitize_fn(np.nan_to_num(x_cg, nan=0.0, posinf=0.0, neginf=0.0))
+        cg_finite = bool(np.all(np.isfinite(x_cg_eval)))
         if cg_finite:
-            cg_finite = float(np.max(np.abs(x_cg))) <= float(self.config.solution_abs_limit)
-        rel_cg = self._relative_residual(linop, x_cg, rhs) if cg_finite else float("inf")
+            cg_finite = float(np.max(np.abs(x_cg_eval))) <= float(self.config.solution_abs_limit)
+        rel_cg = self._relative_residual(linop, x_cg_eval, rhs) if cg_finite else float("inf")
         cg_incomplete_ok = (
             self.config.accept_incomplete_cg
             and info_cg > 0
@@ -172,12 +199,12 @@ class MechanicalEquilibriumSolver:
         cg_ok = (info_cg == 0 or rel_cg <= self.config.accept_rel_residual or cg_incomplete_ok) and cg_finite
         if cg_ok:
             method = "cg_incomplete" if cg_incomplete_ok and info_cg != 0 else "cg"
-            return x_cg, int(info_cg), float(rel_cg), warn_count, method, True
+            return x_cg_eval, int(info_cg), float(rel_cg), warn_count, method, True
 
         if self.config.enable_gmres_fallback:
             restart = max(5, int(self.config.gmres_restart))
             maxiter = max(1, int(self.config.gmres_maxiter))
-            x_seed = x_cg if cg_finite else x0
+            x_seed = x_cg_eval if cg_finite else x0_eval
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always", RuntimeWarning)
                 x_gmres, info_gmres = gmres(
@@ -188,18 +215,44 @@ class MechanicalEquilibriumSolver:
                     atol=0.0,
                     restart=restart,
                     maxiter=maxiter,
+                    M=preconditioner,
                 )
             warn_count += int(sum(1 for w in caught if issubclass(w.category, RuntimeWarning)))
-            gmres_finite = bool(np.all(np.isfinite(x_gmres)))
+            x_gmres_eval = sanitize_fn(np.nan_to_num(x_gmres, nan=0.0, posinf=0.0, neginf=0.0))
+            gmres_finite = bool(np.all(np.isfinite(x_gmres_eval)))
             if gmres_finite:
-                gmres_finite = float(np.max(np.abs(x_gmres))) <= float(self.config.solution_abs_limit)
-            rel_gmres = self._relative_residual(linop, x_gmres, rhs) if gmres_finite else float("inf")
+                gmres_finite = float(np.max(np.abs(x_gmres_eval))) <= float(self.config.solution_abs_limit)
+            rel_gmres = self._relative_residual(linop, x_gmres_eval, rhs) if gmres_finite else float("inf")
             gmres_ok = (info_gmres == 0 or rel_gmres <= self.config.accept_rel_residual) and gmres_finite
             if gmres_ok:
-                return x_gmres, int(info_gmres), float(rel_gmres), warn_count, "gmres", True
-            return x0.copy(), int(info_gmres), float(rel_gmres), warn_count, "hold", False
+                return x_gmres_eval, int(info_gmres), float(rel_gmres), warn_count, "gmres", True
+            return x0_eval.copy(), int(info_gmres), float(rel_gmres), warn_count, "hold", False
 
-        return x0.copy(), int(info_cg), float(rel_cg), warn_count, "hold", False
+        return x0_eval.copy(), int(info_cg), float(rel_cg), warn_count, "hold", False
+
+    def _build_preconditioner(self, g_mask: Array) -> LinearOperator | None:
+        if self.config.preconditioner != "jacobi":
+            return None
+        g = np.asarray(g_mask[..., 0, 0], dtype=float)
+        g = np.clip(g, self.config.preconditioner_g_min, 1.0)
+        cdiag = np.stack(
+            [np.abs(self.stiffness[..., i, i, i, i]) for i in range(3)],
+            axis=-1,
+        )
+        cdiag = np.nan_to_num(cdiag, nan=1.0, posinf=1.0, neginf=1.0)
+        floor = max(float(self.config.preconditioner_floor), 1e-12)
+        lap_coeff = 0.0
+        for dx in self.spacing:
+            lap_coeff += 2.0 / max(float(dx) * float(dx), 1e-12)
+        diag = float(self.config.regularization) + lap_coeff * g[..., None] * np.maximum(cdiag, floor)
+        diag = np.maximum(np.nan_to_num(diag, nan=floor, posinf=floor, neginf=floor), floor)
+        inv_diag = (1.0 / diag).reshape(-1)
+
+        def apply(vec: np.ndarray) -> np.ndarray:
+            v = np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0)
+            return inv_diag * v
+
+        return LinearOperator((self.num_dofs, self.num_dofs), matvec=apply)
 
     @staticmethod
     def _split_positive_spectral(strain: Array) -> tuple[Array, Array, Array]:
@@ -284,8 +337,14 @@ class MechanicalEquilibriumSolver:
         accepted = True
         rel_residual = 0.0
         gmres_fallback_used = False
+        preconditioner = self._build_preconditioner(g_mask)
 
         if not self.config.unilateral:
+            def sanitize_solution(vec: np.ndarray) -> np.ndarray:
+                arr = vec.reshape(crack.shape + (3,))
+                arr = self._remove_rigid_translation(arr)
+                return arr.reshape(-1)
+
             def matvec(vec: np.ndarray) -> np.ndarray:
                 vec = np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0)
                 u_loc = vec.reshape(crack.shape + (3,))
@@ -296,16 +355,20 @@ class MechanicalEquilibriumSolver:
                 divsigma = divergence(stress, self.spacing, self.grid.periodic)
                 if self.config.regularization > 0.0:
                     divsigma += self.config.regularization * u_loc
+                divsigma = np.nan_to_num(divsigma, nan=0.0, posinf=0.0, neginf=0.0)
                 return divsigma.reshape(-1)
 
             rhs_stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, macro - plastic_strain, optimize=True)
             rhs_stress *= g_mask
-            rhs = -divergence(rhs_stress, self.spacing, self.grid.periodic).reshape(-1)
+            rhs_arr = -divergence(rhs_stress, self.spacing, self.grid.periodic)
+            rhs = np.nan_to_num(rhs_arr, nan=0.0, posinf=0.0, neginf=0.0).reshape(-1)
             linop = LinearOperator((self.num_dofs, self.num_dofs), matvec)
             u0 = displacement.reshape(-1)
             rhs_norm = float(np.linalg.norm(rhs))
             max_rhs_norm = max(max_rhs_norm, rhs_norm)
-            solution, info, rel_residual, warn_n, solver_used, accepted = self._iterative_solve(linop, rhs, u0)
+            solution, info, rel_residual, warn_n, solver_used, accepted = self._iterative_solve(
+                linop, rhs, u0, sanitize=sanitize_solution, preconditioner=preconditioner
+            )
             runtime_warning_count += int(warn_n)
             gmres_fallback_used = solver_used == "gmres"
             last_cg_info = int(info)
@@ -317,10 +380,19 @@ class MechanicalEquilibriumSolver:
         else:
             u = displacement.copy()
             outer_converged = False
+            def sanitize_solution(vec: np.ndarray) -> np.ndarray:
+                arr = vec.reshape(crack.shape + (3,))
+                arr = self._remove_rigid_translation(arr)
+                return arr.reshape(-1)
             for outer_idx in range(self.config.outer_max_iters):
                 outer_iterations = outer_idx + 1
                 strain_total = sym_grad(u, self.spacing, self.grid.periodic) + macro
-                strain_eff = strain_total - plastic_strain
+                strain_eff = np.nan_to_num(
+                    strain_total - plastic_strain,
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
                 if self.config.unilateral_mode == "spectral":
                     vecs_cached, mask_cached, _ = self._split_positive_spectral(strain_eff)
 
@@ -342,7 +414,8 @@ class MechanicalEquilibriumSolver:
                     strain_macro_neg = strain_eff_macro - strain_macro_pos
                     stress_rhs = g_mask * np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_macro_pos, optimize=True)
                     stress_rhs += np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_macro_neg, optimize=True)
-                    return -divergence(stress_rhs, self.spacing, self.grid.periodic).reshape(-1)
+                    rhs_arr = -divergence(stress_rhs, self.spacing, self.grid.periodic)
+                    return np.nan_to_num(rhs_arr, nan=0.0, posinf=0.0, neginf=0.0).reshape(-1)
 
                 def matvec(vec: np.ndarray) -> np.ndarray:
                     vec = np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0)
@@ -356,6 +429,7 @@ class MechanicalEquilibriumSolver:
                     divsigma = divergence(stress, self.spacing, self.grid.periodic)
                     if self.config.regularization > 0.0:
                         divsigma += self.config.regularization * u_loc
+                    divsigma = np.nan_to_num(divsigma, nan=0.0, posinf=0.0, neginf=0.0)
                     return divsigma.reshape(-1)
 
                 rhs = _build_rhs()
@@ -363,7 +437,9 @@ class MechanicalEquilibriumSolver:
                 u0 = u.reshape(-1)
                 rhs_norm = float(np.linalg.norm(rhs))
                 max_rhs_norm = max(max_rhs_norm, rhs_norm)
-                solution, info, rel_residual, warn_n, solver_used, accepted = self._iterative_solve(linop, rhs, u0)
+                solution, info, rel_residual, warn_n, solver_used, accepted = self._iterative_solve(
+                    linop, rhs, u0, sanitize=sanitize_solution, preconditioner=preconditioner
+                )
                 runtime_warning_count += int(warn_n)
                 gmres_fallback_used = gmres_fallback_used or solver_used == "gmres"
                 last_cg_info = int(info)
@@ -396,6 +472,7 @@ class MechanicalEquilibriumSolver:
             "rel_residual": float(rel_residual),
             "runtime_warning_count": int(runtime_warning_count),
             "gmres_fallback_used": bool(gmres_fallback_used),
+            "preconditioner": str(self.config.preconditioner),
         }
 
         total_strain = sym_grad(u, self.spacing, self.grid.periodic) + macro

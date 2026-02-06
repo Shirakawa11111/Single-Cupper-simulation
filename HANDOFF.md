@@ -2,7 +2,7 @@
 
 Project path: /Users/bojingkai/Desktop/单晶铜拉伸模拟
 Date: 2026-02-06
-Current branch/commit: main @ 9f6ea63 (Phase-1 reproducibility: configs, runners, docs, and README updates)
+Current branch/commit: main @ 24be1d1 (Phase-2 stability gate and crack-onset threshold lock)
 
 Status
 - Working tree is dirty with many generated artifacts (pycache, VTKs, test runs). Do not commit these.
@@ -66,6 +66,9 @@ Recent outputs (not committed)
 - sim/tests/regress_runs/2026-02-06/phase2_gate_smoke_v2/
 - sim/tests/regress_runs/2026-02-06/crack_onset_scan_full_locked/
 - sim/tests/regress_runs/2026-02-06/crack_onset_aggressive_only_post_solver_v2/
+- sim/tests/regress_runs/2026-02-06/phase2_gate_200918/
+- sim/tests/regress_runs/2026-02-06/crack_onset_scan_full_locked_v2/
+- sim/tests/regress_runs/2026-02-06/crack_onset_scan_full_locked_v3/
 
 Phase-1 validation snapshot (2026-02-06)
 - Strict suite command:
@@ -100,6 +103,19 @@ Numerical notes
   - `onset_cases=3/4`
   - `runtime_warning_count=0` for all cases
   - criteria currently locked at `min_onset_cases=1`, `max_runtime_warnings=50`
+- Criteria-refresh full scan (`crack_onset_scan_full_locked_v3`) passes with:
+  - `onset_cases=3/4`
+  - `runtime_warning_count=0` for all cases
+  - length-led onset logic enabled (`onset_length` primary, `onset_mean_aux` auxiliary)
+  - criteria currently locked at:
+    - `min_crack_delta=5.0e-2`
+    - `min_crack_mean_delta=5.0e-4`
+    - `min_crack_length_for_mean_aux=1.0e-1`
+    - `max_runtime_warnings=50`
+    - `max_mechanical_cg_failures=1300`
+    - `max_mechanical_not_accepted_steps=320`
+    - `max_crack_cg_nonconverged_steps=320`
+    - `max_nonfinite_count=0`
 - Residual risk:
   - notch cases still show frequent mechanical `info>0` and high `mechanical_not_accepted_steps`.
   - keep this as next numerical-robustness target (preconditioned operator or alternative linear solver for unilateral branch).
@@ -115,10 +131,9 @@ Open decisions / next steps
 - Prioritize mechanical CG diagnostics:
   - confirm whether high `mechanical_cg_failures` reflects true non-convergence vs expected null-space behavior.
   - if needed, add preconditioner/regularization or solver fallback for unilateral branch.
-- Define Phase-2 acceptance thresholds for:
-  - `max_runtime_warnings`
-  - `max_mechanical_cg_failures`
-  - `min_onset_cases`
+- Continue tightening Phase-2 thresholds after solver improvements:
+  - lower `max_mechanical_not_accepted_steps`
+  - lower `max_crack_cg_nonconverged_steps`
 
 Notes
 - accum_plastic is currently sum|gamma_s|; eps_eq can stay as output-only.

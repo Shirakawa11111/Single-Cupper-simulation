@@ -104,6 +104,12 @@ def main() -> int:
         help="Threshold for stability_diagnostics.crack_cg_nonconverged_steps.",
     )
     parser.add_argument(
+        "--max-mechanical-not-accepted-steps",
+        type=int,
+        default=None,
+        help="Threshold for stability_diagnostics.mechanical_not_accepted_steps.",
+    )
+    parser.add_argument(
         "--max-nonfinite-count",
         type=int,
         default=0,
@@ -166,6 +172,8 @@ def main() -> int:
     )
     if args.max_mechanical_cg_failures is not None:
         tasks[-1][1].extend(["--max-mechanical-cg-failures", str(args.max_mechanical_cg_failures)])
+    if args.max_mechanical_not_accepted_steps is not None:
+        tasks[-1][1].extend(["--max-mechanical-not-accepted-steps", str(args.max_mechanical_not_accepted_steps)])
     if args.max_crack_cg_nonconverged_steps is not None:
         tasks[-1][1].extend(
             ["--max-crack-cg-nonconverged-steps", str(args.max_crack_cg_nonconverged_steps)]
@@ -190,6 +198,8 @@ def main() -> int:
         scan_cmd.extend(["--min-onset-cases", str(args.scan_min_onset_cases)])
     if args.max_mechanical_cg_failures is not None:
         scan_cmd.extend(["--max-mechanical-cg-failures", str(args.max_mechanical_cg_failures)])
+    if args.max_mechanical_not_accepted_steps is not None:
+        scan_cmd.extend(["--max-mechanical-not-accepted-steps", str(args.max_mechanical_not_accepted_steps)])
     if args.max_crack_cg_nonconverged_steps is not None:
         scan_cmd.extend(
             ["--max-crack-cg-nonconverged-steps", str(args.max_crack_cg_nonconverged_steps)]
@@ -213,6 +223,7 @@ def main() -> int:
         "strict": args.strict,
         "max_runtime_warnings": args.max_runtime_warnings,
         "max_mechanical_cg_failures": args.max_mechanical_cg_failures,
+        "max_mechanical_not_accepted_steps": args.max_mechanical_not_accepted_steps,
         "max_crack_cg_nonconverged_steps": args.max_crack_cg_nonconverged_steps,
         "max_nonfinite_count": args.max_nonfinite_count,
         "scan_config": str(args.scan_config),

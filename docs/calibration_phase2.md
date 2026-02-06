@@ -33,14 +33,22 @@ python sim/tests/regress_phase2.py --strict
 ```bash
 python sim/tests/run_virtual_cycle_config.py \
   --config sim/configs/fatigue_lowamp.yaml \
-  --max-runtime-warnings 20
+  --max-runtime-warnings 50 \
+  --max-mechanical-not-accepted-steps 320 \
+  --max-crack-cg-nonconverged-steps 320 \
+  --max-nonfinite-count 0
 ```
 3. Compare simulation curve (`virtual_cycle_stress_strain.csv`) with experiment:
 - Match small-strain slope first.
 - Then match loop width (`plastic_range`) and RSS peak trend.
 4. Run crack-onset screening after each parameter update:
 ```bash
-python sim/tests/scan_crack_onset.py --config sim/configs/crack_onset_scan.yaml
+python sim/tests/scan_crack_onset.py \
+  --config sim/configs/crack_onset_scan.yaml \
+  --max-runtime-warnings 50 \
+  --max-mechanical-not-accepted-steps 320 \
+  --max-crack-cg-nonconverged-steps 320 \
+  --max-nonfinite-count 0
 ```
 5. Record accepted set in `docs/parameter_register.md`:
 - add date, commit hash, config path, and fit notes.
@@ -49,4 +57,6 @@ python sim/tests/scan_crack_onset.py --config sim/configs/crack_onset_scan.yaml
 - `regress_phase2.py` passes.
 - RuntimeWarning counts under configured thresholds.
 - At least 1 crack-onset case from `scan_crack_onset.py`.
+- Onset should be length-led: prefer `onset_length=true`; `onset_mean_aux` is auxiliary.
+- Negative control (`no_notch_control`) should keep `onset=false` while `checks_ok=true`.
 - Experimental overlay mismatch reduced and documented with plots/metrics.

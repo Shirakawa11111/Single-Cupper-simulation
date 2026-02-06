@@ -16,6 +16,7 @@ defaults:
       - [7.2, 8.8]
       - [2.8, 5.2]
     notch_crack_value: 0.6
+    crack_length_threshold: 0.4
     mech_max_iters: 80
     mech_outer_max_iters: 2
     mech_tol: 5.0e-5
@@ -24,12 +25,18 @@ defaults:
     mech_accept_rel_residual: 1.0e-2
     mech_accept_incomplete_cg: true
     mech_enable_gmres_fallback: false
-    mech_solution_abs_limit: 1.0
+    mech_solution_abs_limit: 10.0
   criteria:
-    min_crack_delta: 1.0e-6
+    min_crack_delta: 5.0e-2
     min_crack_mean_delta: 5.0e-4
+    allow_mean_aux: true
+    min_crack_length_for_mean_aux: 1.0e-1
     min_onset_cases: 1
     max_runtime_warnings: 50
+    max_mechanical_cg_failures: 1300
+    max_mechanical_not_accepted_steps: 320
+    max_crack_cg_nonconverged_steps: 320
+    max_nonfinite_count: 0
 
 cases:
   - name: "notch_aggressive_drive"

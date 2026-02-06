@@ -141,6 +141,12 @@ def main() -> int:
         help="Fail when stability_diagnostics.mechanical_cg_failures exceeds this threshold.",
     )
     parser.add_argument(
+        "--max-mechanical-not-accepted-steps",
+        type=int,
+        default=None,
+        help="Fail when stability_diagnostics.mechanical_not_accepted_steps exceeds this threshold.",
+    )
+    parser.add_argument(
         "--max-crack-cg-nonconverged-steps",
         type=int,
         default=None,
@@ -207,11 +213,20 @@ def main() -> int:
             f"runtime_warning_count_exceeded({runtime_warning_count}>{args.max_runtime_warnings})"
         )
     mech_cg_failures = int(diagnostics.get("mechanical_cg_failures", 0))
+    mech_not_accepted_steps = int(diagnostics.get("mechanical_not_accepted_steps", 0))
     crack_cg_nonconverged_steps = int(diagnostics.get("crack_cg_nonconverged_steps", 0))
     nonfinite_count = int(diagnostics.get("nonfinite_count", 0))
     if args.max_mechanical_cg_failures is not None and mech_cg_failures > args.max_mechanical_cg_failures:
         failure_reasons.append(
             f"mechanical_cg_failures_exceeded({mech_cg_failures}>{args.max_mechanical_cg_failures})"
+        )
+    if (
+        args.max_mechanical_not_accepted_steps is not None
+        and mech_not_accepted_steps > args.max_mechanical_not_accepted_steps
+    ):
+        failure_reasons.append(
+            "mechanical_not_accepted_steps_exceeded("
+            f"{mech_not_accepted_steps}>{args.max_mechanical_not_accepted_steps})"
         )
     if (
         args.max_crack_cg_nonconverged_steps is not None
@@ -240,6 +255,7 @@ def main() -> int:
         "limits": {
             "max_runtime_warnings": args.max_runtime_warnings,
             "max_mechanical_cg_failures": args.max_mechanical_cg_failures,
+            "max_mechanical_not_accepted_steps": args.max_mechanical_not_accepted_steps,
             "max_crack_cg_nonconverged_steps": args.max_crack_cg_nonconverged_steps,
             "max_nonfinite_count": args.max_nonfinite_count,
         },

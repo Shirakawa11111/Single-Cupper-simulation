@@ -120,6 +120,10 @@ def run_virtual_cycles(
     mech_gmres_restart: int | None = None,  # GMRES restart
     mech_gmres_maxiter: int | None = None,  # GMRES maxiter
     mech_solution_abs_limit: float | None = None, # 迭代解绝对值上限
+    mech_unilateral_mode: str | None = None,  # 单向分裂模式: spectral/volumetric
+    mech_preconditioner: str | None = None,  # 机械线性求解预条件: none/jacobi
+    mech_preconditioner_floor: float | None = None,  # Jacobi 对角下限
+    mech_preconditioner_g_min: float | None = None,  # Jacobi 裂纹退化下限
     run_dir: Path | None = None,            # 输出根目录（默认按日期/任务自动生成）
     task: str = "virtual_cycle",            # 任务标签（用于命名输出目录）
     auto_output: bool = False,              # 若 True 且 run_dir 提供/默认，则自动填充输出文件
@@ -211,6 +215,18 @@ def run_virtual_cycles(
         mech_cfg.gmres_maxiter = mech_gmres_maxiter
     if mech_solution_abs_limit is not None:
         mech_cfg.solution_abs_limit = mech_solution_abs_limit
+    if mech_unilateral_mode is not None:
+        if mech_unilateral_mode not in ("spectral", "volumetric"):
+            raise ValueError("mech_unilateral_mode must be 'spectral' or 'volumetric'.")
+        mech_cfg.unilateral_mode = mech_unilateral_mode
+    if mech_preconditioner is not None:
+        if mech_preconditioner not in ("none", "jacobi"):
+            raise ValueError("mech_preconditioner must be 'none' or 'jacobi'.")
+        mech_cfg.preconditioner = mech_preconditioner
+    if mech_preconditioner_floor is not None:
+        mech_cfg.preconditioner_floor = mech_preconditioner_floor
+    if mech_preconditioner_g_min is not None:
+        mech_cfg.preconditioner_g_min = mech_preconditioner_g_min
 
     builder = Cu111StructureBuilder(
         grid,
@@ -338,6 +354,9 @@ def run_virtual_cycles(
         "mechanical_positive_info_steps": 0,
         "mechanical_gmres_fallback_steps": 0,
         "mechanical_not_accepted_steps": 0,
+        "mechanical_hold_steps": 0,
+        "mechanical_rel_residual_nonfinite_steps": 0,
+        "mechanical_rel_residual_max": 0.0,
         "crack_cg_nonconverged_steps": 0,
         "crack_cg_not_accepted_steps": 0,
         "nonfinite_count": 0,
@@ -387,8 +406,18 @@ def run_virtual_cycles(
                     solver_diag["mechanical_positive_info_steps"] += 1
                 if bool(step_diag.get("mechanical_gmres_fallback_used", False)):
                     solver_diag["mechanical_gmres_fallback_steps"] += 1
+                if str(step_diag.get("mechanical_last_solver_used", "cg")) == "hold":
+                    solver_diag["mechanical_hold_steps"] += 1
                 if not bool(step_diag.get("mechanical_last_accepted", True)):
                     solver_diag["mechanical_not_accepted_steps"] += 1
+                rel_res = float(step_diag.get("mechanical_last_rel_residual", 0.0))
+                if not np.isfinite(rel_res):
+                    solver_diag["mechanical_rel_residual_nonfinite_steps"] += 1
+                else:
+                    solver_diag["mechanical_rel_residual_max"] = max(
+                        float(solver_diag["mechanical_rel_residual_max"]),
+                        rel_res,
+                    )
                 if not bool(step_diag.get("mechanical_outer_converged", True)):
                     solver_diag["mechanical_outer_not_converged_steps"] += 1
                 if int(step_diag.get("crack_cg_info", 0)) != 0:
@@ -629,6 +658,11 @@ def run_virtual_cycles(
                 "mechanical_positive_info_steps": int(solver_diag["mechanical_positive_info_steps"]),
                 "mechanical_gmres_fallback_steps": int(solver_diag["mechanical_gmres_fallback_steps"]),
                 "mechanical_not_accepted_steps": int(solver_diag["mechanical_not_accepted_steps"]),
+                "mechanical_hold_steps": int(solver_diag["mechanical_hold_steps"]),
+                "mechanical_rel_residual_nonfinite_steps": int(
+                    solver_diag["mechanical_rel_residual_nonfinite_steps"]
+                ),
+                "mechanical_rel_residual_max": float(solver_diag["mechanical_rel_residual_max"]),
                 "crack_cg_nonconverged_steps": int(solver_diag["crack_cg_nonconverged_steps"]),
                 "crack_cg_not_accepted_steps": int(solver_diag["crack_cg_not_accepted_steps"]),
                 "nonfinite_count": int(solver_diag["nonfinite_count"]),

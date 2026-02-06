@@ -67,6 +67,7 @@ python sim/tests/run_phase1_suite.py --strict --out sim/tests/regress_runs/YYYY-
 python sim/tests/run_virtual_cycle_config.py \
   --config sim/configs/monotonic_baseline.yaml \
   --max-runtime-warnings 20 \
+  --max-mechanical-not-accepted-steps 0 \
   --max-crack-cg-nonconverged-steps 0 \
   --max-nonfinite-count 0
 ```
@@ -75,14 +76,19 @@ python sim/tests/run_virtual_cycle_config.py \
 ```bash
 python sim/tests/scan_crack_onset.py \
   --config sim/configs/crack_onset_scan.yaml \
-  --max-runtime-warnings 20
+  --max-runtime-warnings 50 \
+  --max-mechanical-not-accepted-steps 320 \
+  --max-crack-cg-nonconverged-steps 320 \
+  --max-nonfinite-count 0
 ```
 
 Phase-2 门禁（推荐）：
 ```bash
 python sim/tests/regress_phase2.py \
   --strict \
-  --max-runtime-warnings 20 \
+  --max-runtime-warnings 50 \
+  --max-mechanical-not-accepted-steps 320 \
+  --max-crack-cg-nonconverged-steps 320 \
   --scan-config sim/configs/crack_onset_scan.yaml
 ```
 
@@ -98,7 +104,8 @@ python sim/tests/regress_phase2.py \
 
 说明：
 - `run_virtual_cycle_config.py` 现会输出 `runtime_warning_count`、`runtime_warning_items` 与 `stability_diagnostics`（含 mechanical/crack CG 与 nonfinite 计数）。
-- `scan_crack_onset.py` 会输出 `summary.json` + `summary.csv`，用于筛选可触发裂纹增长的候选工况。
+- `scan_crack_onset.py` 会输出 `summary.json` + `summary.csv`，并区分 `onset_length`（长度主判据）与 `onset_mean_aux`（均值辅助判据）。
+- `sim/configs/crack_onset_scan.yaml` 默认使用 `crack_length_threshold=0.4`，可避免 `crack_length` 长时间恒零。
 - 标定闭环执行模板见 `docs/calibration_phase2.md`。
 
 ## COMSOL 训练/标定（可选）
@@ -290,3 +297,17 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
 - 机械/裂纹求解稳定性策略（本轮）：
   - 机械：CG 残差验收 + 正则 + 解幅值上限 + 可选 GMRES 回退。
   - 裂纹：允许接受有限的非零 `crack_cg_info` 结果，避免裂纹更新冻结。
+
+### 验证记录（2026-02-06，Phase-2 判据收紧）
+- 全量裂纹萌生扫描（4 cases）：
+  `sim/tests/regress_runs/2026-02-06/crack_onset_scan_full_locked_v3/summary.json`  
+  结果：`passed=true`，`onset_cases=3/4`，`runtime_warning_count=0`（全部 case）。
+- 判据更新（`sim/configs/crack_onset_scan.yaml`）：
+  - `min_crack_delta=5.0e-2`（长度主判据）
+  - `allow_mean_aux=true` + `min_crack_length_for_mean_aux=1.0e-1`
+  - `max_mechanical_not_accepted_steps=320`
+  - `max_crack_cg_nonconverged_steps=320`
+  - `max_runtime_warnings=50`
+- 结果解读：
+  - notch 三个 case：`onset_length=true`
+  - no-notch 对照：`onset=false` 且 `checks_ok=true`（作为负对照保留）
