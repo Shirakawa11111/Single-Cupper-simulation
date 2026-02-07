@@ -121,6 +121,19 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--max-cases", type=int, default=None, help="Optional cap for quick dry runs.")
     parser.add_argument(
+        "--auto-output",
+        dest="auto_output",
+        action="store_true",
+        default=True,
+        help="Enable per-case VTK/LAMMPS auto outputs (default).",
+    )
+    parser.add_argument(
+        "--no-auto-output",
+        dest="auto_output",
+        action="store_false",
+        help="Disable per-case VTK/LAMMPS auto outputs for faster scans.",
+    )
+    parser.add_argument(
         "--max-runtime-warnings",
         type=int,
         default=None,
@@ -155,6 +168,12 @@ def main() -> int:
         type=int,
         default=None,
         help="Override criteria.max_nonfinite_count from YAML.",
+    )
+    parser.add_argument(
+        "--min-notch-cycles-completed",
+        type=int,
+        default=None,
+        help="Override criteria.min_notch_cycles_completed from YAML.",
     )
     args = parser.parse_args()
 
@@ -191,6 +210,8 @@ def main() -> int:
         None if max_crack_cg_nonconverged_steps is None else int(max_crack_cg_nonconverged_steps)
     )
     max_nonfinite_count = int(criteria.get("max_nonfinite_count", 0))
+    min_notch_cycles_completed = criteria.get("min_notch_cycles_completed", None)
+    min_notch_cycles_completed = None if min_notch_cycles_completed is None else int(min_notch_cycles_completed)
     if args.max_runtime_warnings is not None:
         max_runtime_warnings = int(args.max_runtime_warnings)
     if args.min_onset_cases is not None:
@@ -203,6 +224,8 @@ def main() -> int:
         max_crack_cg_nonconverged_steps = int(args.max_crack_cg_nonconverged_steps)
     if args.max_nonfinite_count is not None:
         max_nonfinite_count = int(args.max_nonfinite_count)
+    if args.min_notch_cycles_completed is not None:
+        min_notch_cycles_completed = int(args.min_notch_cycles_completed)
 
     cases = raw.get("cases", [])
     if not isinstance(cases, list) or not cases:
@@ -230,7 +253,7 @@ def main() -> int:
         vc_cfg = dict(vc_cfg)
         vc_cfg["task"] = f"scan_{case_key}"
         vc_cfg["run_dir"] = case_dir
-        vc_cfg["auto_output"] = True
+        vc_cfg["auto_output"] = bool(args.auto_output)
         vc_cfg = _normalize_vc_config(vc_cfg)
 
         diagnostics: dict[str, float | int | bool] = {}
@@ -263,6 +286,8 @@ def main() -> int:
         mech_not_accepted_steps = int(diagnostics.get("mechanical_not_accepted_steps", 0))
         crack_cg_nonconv = int(diagnostics.get("crack_cg_nonconverged_steps", 0))
         nonfinite_count = int(diagnostics.get("nonfinite_count", 0))
+        cycles_completed = len(results)
+        notch_case = vc_cfg.get("notch_box", None) is not None
         finite_ok = _is_finite_tree(diagnostics) and _is_finite_tree(
             None if last is None else last.__dict__
         )
@@ -279,6 +304,11 @@ def main() -> int:
             else crack_cg_nonconv <= max_crack_cg_nonconverged_steps
         )
         nonfinite_ok = nonfinite_count <= max_nonfinite_count
+        cycles_ok = (
+            True
+            if (min_notch_cycles_completed is None or not notch_case)
+            else cycles_completed >= min_notch_cycles_completed
+        )
         onset_length = crack_delta >= min_crack_delta
         onset_mean_aux = crack_mean_delta >= min_crack_mean_delta and crack_len1 >= min_crack_length_for_mean_aux
         onset = onset_length or (allow_mean_aux and onset_mean_aux)
@@ -290,6 +320,7 @@ def main() -> int:
             and mech_accept_ok
             and crack_cg_ok
             and nonfinite_ok
+            and cycles_ok
         )
         passed = (
             checks_ok
@@ -305,7 +336,8 @@ def main() -> int:
             "onset_mean_aux": onset_mean_aux,
             "checks_ok": checks_ok,
             "error": error,
-            "cycles_completed": len(results),
+            "cycles_completed": cycles_completed,
+            "notch_case": notch_case,
             "crack_length_initial": crack_len0,
             "crack_length_final": crack_len1,
             "crack_delta": crack_delta,
@@ -323,6 +355,7 @@ def main() -> int:
             "mech_accept_ok": mech_accept_ok,
             "crack_cg_ok": crack_cg_ok,
             "nonfinite_ok": nonfinite_ok,
+            "cycles_ok": cycles_ok,
             "mech_not_accepted_steps": mech_not_accepted_steps,
             "paris_coeff": float(paris_coeff) if math.isfinite(float(paris_coeff)) else None,
             "coffman_coeff": float(coffman) if math.isfinite(float(coffman)) else None,
@@ -366,6 +399,7 @@ def main() -> int:
             "max_mechanical_not_accepted_steps": max_mechanical_not_accepted_steps,
             "max_crack_cg_nonconverged_steps": max_crack_cg_nonconverged_steps,
             "max_nonfinite_count": max_nonfinite_count,
+            "min_notch_cycles_completed": min_notch_cycles_completed,
         },
         "cases_total": len(case_rows),
         "onset_cases": onset_cases,
@@ -380,7 +414,8 @@ def main() -> int:
         fh.write(
             "name,passed,onset,onset_length,onset_mean_aux,cycles_completed,crack_delta,crack_mean_delta,"
             "crack_length_final,crack_mean_final,runtime_warning_count,"
-            "finite_ok,warning_ok,mech_ok,mech_accept_ok,crack_cg_ok,nonfinite_ok,mech_not_accepted_steps\n"
+            "finite_ok,warning_ok,mech_ok,mech_accept_ok,crack_cg_ok,nonfinite_ok,cycles_ok,"
+            "notch_case,mech_not_accepted_steps\n"
         )
         for r in case_rows:
             fh.write(
@@ -392,6 +427,7 @@ def main() -> int:
                 f"{int(bool(r['finite_ok']))},{int(bool(r['warning_ok']))},"
                 f"{int(bool(r['mech_ok']))},{int(bool(r['mech_accept_ok']))},"
                 f"{int(bool(r['crack_cg_ok']))},{int(bool(r['nonfinite_ok']))},"
+                f"{int(bool(r['cycles_ok']))},{int(bool(r['notch_case']))},"
                 f"{int(r['mech_not_accepted_steps'])}\n"
             )
 

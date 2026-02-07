@@ -152,6 +152,101 @@ Numerical notes
       - `onset_length=true`
   - gate verification:
     - `sim/tests/regress_runs/2026-02-07/phase2_gate_reg2_len0995_fail0999_cg20/summary.json` (`passed=true`)
+- scan gate upgrade (week-3 item-1):
+  - `sim/tests/scan_crack_onset.py` now supports `min_notch_cycles_completed` (YAML + CLI override).
+  - case summary adds `notch_case` and `cycles_ok`; `checks_ok` now includes trajectory gate.
+  - regression wrapper passthrough added:
+    - `sim/tests/regress_phase2.py --scan-min-notch-cycles-completed <N>`
+  - gatecheck examples:
+    - pass: `sim/tests/regress_runs/2026-02-07/crack_onset_scan_gatecheck_n3/summary.json`
+    - fail-on-purpose: `sim/tests/regress_runs/2026-02-07/crack_onset_scan_quick_gatecheck_fail/summary.json`
+- Week-3 DOE runner (item-2, in progress):
+  - new script: `sim/tests/sweep_crack_onset_doe.py`
+  - capability:
+    - Cartesian sweep on `mech_regularization` / `mech_solution_abs_limit` / `mech_accept_rel_residual`
+    - optional `crack_length_threshold` / `failure_threshold` sweep
+    - per-run timeout (`--scan-timeout-s`) to prevent single-combo stall
+    - optional DOE budget override (`--vc-cycles` / `--vc-cycle-points` / `--vc-mech-*`)
+    - outputs `runs.csv` + `cases.csv` + `summary.json`
+  - scan speed control:
+    - `sim/tests/scan_crack_onset.py` now supports `--no-auto-output` to disable per-case VTK/LAMMPS writes during scan.
+    - DOE defaults to `--no-auto-output`; can re-enable with `--scan-auto-output`.
+  - quick validation run:
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_quick_n1/summary.json`
+    - matrix: `reg={1.0,2.0}`, `limit={8,10}`, `rel=0.008`, quick notch gate=`1`
+    - result: all 4 runs pass; `reg=2.0` reduces notch clipping from `45~48/48` to `14/48` with `mechanical_not_accepted_steps=0`.
+  - full-config budget finding:
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_full_case1_noio_t420/summary.json`
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_full_n3_r2/summary.json`
+    - even single-case (`max-cases=1`) run times out at `420s` (no-output mode), indicating solver cost dominates over file I/O.
+    - notch-3 matrix (`max-cases=3`) times out at `900s` per candidate under current budget.
+  - fast-budget pre-screen (first usable Week-3 ranking sample):
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_budget_case1_fast_r2r25/summary.json`
+    - setup:
+      - `vc-cycles=2`, `vc-cycle-points=20`, `vc-mech-max-iters=20`, `vc-mech-outer-max-iters=1`
+      - `max-cases=1`, `scan-timeout-s=180`, `min-notch-cycles-completed=1`
+    - result:
+      - `reg=2.5` outperforms `reg=2.0` on clipping (`5/40` vs `13/40`) and crack-CG nonconv (`6` vs `9`)
+      - both keep `mechanical_not_accepted_steps=0`
+      - both fail onset gate under fast budget (`onset_cases=0`), so this layer should be treated as numerical pre-screen only.
+  - 12-point fast-budget sweep (reranked with `checks_passed` priority):
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_budget_case1_fast_12pt_rerank/summary.json`
+    - setup:
+      - `max-cases=1`, `scan-timeout-s=180`
+      - `vc-cycles=2`, `vc-cycle-points=20`, `vc-mech-max-iters=20`, `vc-mech-outer-max-iters=1`
+      - matrix: `reg={2.0,2.5,3.0}`, `limit={8,10}`, `rel={0.008,0.01}`
+    - result:
+      - best checked group: `reg=2.5` family
+      - selected top-2:
+        - `run_008_reg2p5_lim10_rel0p01...` (`clip=5/40`, `crack_cg_max=6`)
+        - `run_007_reg2p5_lim10_rel0p008...` (`clip=5/40`, `crack_cg_max=6`)
+      - `reg=3.0` has lowest clipping but fails checks (`crack_cg_nonconverged_steps=38`).
+  - n=3 fast-budget cross-case verification:
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_budget_n3_top2/summary.json`
+    - `reg=2.5, limit=10` pair fails on `notch_medium_drive` (`crack_cg_nonconverged_steps=38`), despite low clipping.
+  - n=3 fast-budget control contrast:
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_budget_n3_reg2_ctrl/summary.json`
+    - `reg=2.0, limit=10` passes checks across all notch cases (`crack_cg_max=11`) but clipping rises to `39/120` (~0.325).
+  - bridge candidate (best current compromise under fast budget):
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_budget_n3_reg25_lim8/summary.json`
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_budget_n3_reg25_lim8_rel008/summary.json`
+    - `reg=2.5, limit=8` passes checks with lower clipping (`14/120`, max 5/40) and `crack_cg_max=11`.
+  - full n=3 verification on bridge candidate:
+    - `sim/tests/regress_runs/2026-02-07/doe_week3_full_n3_reg25_lim8_rel001/summary.json`
+    - full settings (`cycles=4`, `cycle_points=80`, criteria notch gate=3) completed in `~542s` without timeout.
+    - outcome:
+      - clipping is excellent: `26/960` total (`~2.71%`)
+      - `mechanical_not_accepted_steps=0`
+      - `onset_cases=3` and all notch cases are length-led (`onset_length=true`)
+      - but `notch_medium_drive` crack branch collapses:
+        - `crack_cg_nonconverged_steps=320` (case check fails)
+    - implication:
+      - current bottleneck has shifted from mechanics to crack-CG robustness on the medium notch trajectory.
+  - crack-CG tuning breakthrough (2026-02-07, week-3 follow-up):
+    - code path opened:
+      - `sim/tests/virtual_cycle.py` now accepts crack-branch solver overrides:
+        - `crack_tol`, `crack_max_iters`, `crack_accept_rel_residual`, `crack_accept_incomplete`
+      - `sim/tests/sweep_crack_onset_doe.py` now supports:
+        - `--vc-crack-tol`, `--vc-crack-max-iters`, `--vc-crack-accept-rel-residual`
+    - ablation:
+      - `crack_tol=1e-5` test:
+        - `sim/tests/regress_runs/2026-02-07/doe_week3_full_case2_reg25_lim8_cracktol1e5/summary.json`
+        - medium case still `crack_cg_nonconverged_steps=320` (no fix)
+      - `crack_max_iters=1200` test:
+        - case2 check:
+          - `sim/tests/regress_runs/2026-02-07/doe_week3_full_case2_reg25_lim8_crackiter1200/summary.json`
+          - medium case improved to `crack_cg_nonconverged_steps=5`
+        - full notch-3 verification:
+          - `sim/tests/regress_runs/2026-02-07/doe_week3_full_n3_reg25_lim8_crackiter1200/summary.json`
+          - `passed=true`, `checks_passed=true`, `onset_cases=3`
+          - notch metrics:
+            - `notch_clip_total=26/960` (ratio `~0.0271`)
+            - `mechanical_not_accepted_steps=0`
+            - `notch_crack_cg_max=8`
+            - all notch cases `onset_length=true`, `cycles_completed=4`
+    - config lock:
+      - `sim/configs/crack_onset_scan.yaml`: add `crack_max_iters: 1200`
+      - `sim/configs/crack_onset_aggressive_only.yaml`: add `crack_max_iters: 1200`
 - Residual risk:
   - post-onset trajectory now reaches 4 cycles for notch cases, but crack_mean remains close to saturation (`~0.9968~0.9984`).
   - next target should calibrate growth slope and saturation timing via notch geometry / toughness / load amplitude, not solver numerics.

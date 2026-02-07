@@ -84,6 +84,10 @@ def run_virtual_cycles(
     notch_crack_value: float = 0.6,     # notch 区域内的初始裂纹值
     stress_mu_weight: float = 0.5,      # von Mises 应力归一化后乘此系数作为 μ_extra，<=0 则关闭
     crack_relax: float = 0.05,          # 裂纹松弛系数（默认较高便于萌生）
+    crack_tol: float | None = None,     # 裂纹 CG 收敛阈值
+    crack_max_iters: int | None = None, # 裂纹 CG 最大迭代
+    crack_accept_rel_residual: float | None = None, # 裂纹 CG 相对残差验收阈值
+    crack_accept_incomplete: bool | None = None, # 裂纹 CG 是否接受 incomplete 结果
     dir_coupling: float = 1.0,          # 方向性增益
     plastic_relax: float = 0.075,       # 塑性松弛；与 PFCCoupling.flow_scale 共同控制屈服后软化速度
     poisson_ratio: float = 0.34,        # 泊松比，用于宏观应变的侧向收缩
@@ -282,6 +286,14 @@ def run_virtual_cycles(
         solver_cfg = SolverConfig(
             dt=5e-3,
             crack_relax=crack_relax,
+            crack_tol=crack_tol if crack_tol is not None else 1e-6,
+            crack_max_iters=crack_max_iters if crack_max_iters is not None else 400,
+            crack_accept_rel_residual=(
+                crack_accept_rel_residual if crack_accept_rel_residual is not None else 5e-3
+            ),
+            crack_accept_incomplete=(
+                crack_accept_incomplete if crack_accept_incomplete is not None else True
+            ),
             plastic_relax=plastic_relax,
             mech_plastic_weight=0.9,
             dir_coupling=dir_coupling,
@@ -324,6 +336,14 @@ def run_virtual_cycles(
     solver_cfg = SolverConfig(
         dt=5e-3,
         crack_relax=crack_relax,
+        crack_tol=crack_tol if crack_tol is not None else 1e-6,
+        crack_max_iters=crack_max_iters if crack_max_iters is not None else 400,
+        crack_accept_rel_residual=(
+            crack_accept_rel_residual if crack_accept_rel_residual is not None else 5e-3
+        ),
+        crack_accept_incomplete=(
+            crack_accept_incomplete if crack_accept_incomplete is not None else True
+        ),
         plastic_relax=plastic_relax,
         mech_plastic_weight=0.9,
         dir_coupling=dir_coupling,

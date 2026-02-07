@@ -30,6 +30,7 @@ defaults:
     mech_clip_solution_on_limit: true
     mech_unilateral_mode: volumetric
     mech_preconditioner: jacobi
+    crack_max_iters: 1200
   criteria:
     min_crack_delta: 5.0e-2
     min_crack_mean_delta: 5.0e-4
@@ -41,6 +42,7 @@ defaults:
     max_mechanical_not_accepted_steps: 160
     max_crack_cg_nonconverged_steps: 20
     max_nonfinite_count: 0
+    min_notch_cycles_completed: 3
 
 cases:
   - name: "control_notch_mild"

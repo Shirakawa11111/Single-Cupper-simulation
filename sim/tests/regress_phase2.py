@@ -128,6 +128,12 @@ def main() -> int:
         default=None,
         help="Override min onset-case count for scan gate.",
     )
+    parser.add_argument(
+        "--scan-min-notch-cycles-completed",
+        type=int,
+        default=None,
+        help="Override notch-case minimum cycles_completed for scan gate.",
+    )
     parser.add_argument("--skip-phase1-suite", action="store_true")
     args = parser.parse_args()
 
@@ -196,6 +202,8 @@ def main() -> int:
         scan_cmd.extend(["--max-cases", str(args.scan_max_cases)])
     if args.scan_min_onset_cases is not None:
         scan_cmd.extend(["--min-onset-cases", str(args.scan_min_onset_cases)])
+    if args.scan_min_notch_cycles_completed is not None:
+        scan_cmd.extend(["--min-notch-cycles-completed", str(args.scan_min_notch_cycles_completed)])
     if args.max_mechanical_cg_failures is not None:
         scan_cmd.extend(["--max-mechanical-cg-failures", str(args.max_mechanical_cg_failures)])
     if args.max_mechanical_not_accepted_steps is not None:
@@ -228,6 +236,7 @@ def main() -> int:
         "max_nonfinite_count": args.max_nonfinite_count,
         "scan_config": str(args.scan_config),
         "scan_min_onset_cases": args.scan_min_onset_cases,
+        "scan_min_notch_cycles_completed": args.scan_min_notch_cycles_completed,
         "passed": passed,
         "total_runtime_warning_count": total_runtime_warnings,
         "tasks": [

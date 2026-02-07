@@ -76,6 +76,7 @@ python sim/tests/run_virtual_cycle_config.py \
 ```bash
 python sim/tests/scan_crack_onset.py \
   --config sim/configs/crack_onset_scan.yaml \
+  --no-auto-output \
   --max-runtime-warnings 50 \
   --max-mechanical-not-accepted-steps 160 \
   --max-crack-cg-nonconverged-steps 20 \
@@ -105,7 +106,25 @@ python sim/tests/regress_phase2.py \
 说明：
 - `run_virtual_cycle_config.py` 现会输出 `runtime_warning_count`、`runtime_warning_items` 与 `stability_diagnostics`（含 mechanical/crack CG 与 nonfinite 计数）。
 - `scan_crack_onset.py` 会输出 `summary.json` + `summary.csv`，并区分 `onset_length`（长度主判据）与 `onset_mean_aux`（均值辅助判据）。
+- `scan_crack_onset.py` 支持 notch 轨迹门禁 `min_notch_cycles_completed`（YAML `criteria` 或 CLI `--min-notch-cycles-completed`），并在 case 结果中输出 `cycles_ok`/`notch_case`。
+- `scan_crack_onset.py` 支持 `--no-auto-output`，可关闭每 case 的 VTK/LAMMPS 落盘用于加速筛选。
+- Week-3 参数 DOE 可用 `sim/tests/sweep_crack_onset_doe.py`：
+```bash
+python sim/tests/sweep_crack_onset_doe.py \
+  --base-config sim/configs/crack_onset_scan_quick.yaml \
+  --tag doe_week3_quick \
+  --max-runs 4 \
+  --max-cases 1 \
+  --min-notch-cycles-completed 1 \
+  --scan-timeout-s 180 \
+  --mech-regularization-values 1.0,2.0 \
+  --mech-solution-abs-limit-values 8,10 \
+  --mech-accept-rel-residual-values 0.008
+```
+  输出：`runs.csv`（组合排序）+ `cases.csv`（逐 case 指标）+ `summary.json`（top-runs）。
+  说明：可用 `--vc-cycles/--vc-cycle-points/--vc-mech-*` 建立“数值预筛层”，先比较稳定性再回到 full scan。
 - `sim/configs/crack_onset_scan.yaml` 默认使用 `crack_length_threshold=0.995` + `failure_threshold=0.999`，用于恢复 length-led onset 判据并支持 post-onset 轨迹对齐。
+- `sim/configs/crack_onset_scan.yaml` 现锁定 `crack_max_iters=1200`，用于抑制 `notch_medium_drive` 的 crack-CG 非收敛高频问题。
 - 默认机械策略切到 `volumetric + jacobi`，并启用 `mech_clip_solution_on_limit=true`（解超限裁剪而非直接拒收）。
 - 标定闭环执行模板见 `docs/calibration_phase2.md`。
 

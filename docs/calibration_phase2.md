@@ -45,13 +45,60 @@ python sim/tests/run_virtual_cycle_config.py \
 ```bash
 python sim/tests/scan_crack_onset.py \
   --config sim/configs/crack_onset_scan.yaml \
+  --no-auto-output \
   --max-runtime-warnings 50 \
   --max-mechanical-not-accepted-steps 160 \
   --max-crack-cg-nonconverged-steps 20 \
+  --min-notch-cycles-completed 3 \
   --max-nonfinite-count 0
 ```
 5. Record accepted set in `docs/parameter_register.md`:
 - add date, commit hash, config path, and fit notes.
+
+### Optional: Week-3 DOE Pre-Screen
+Use DOE pre-screen to narrow solver candidates before full `n=3` notch scan:
+```bash
+python sim/tests/sweep_crack_onset_doe.py \
+  --base-config sim/configs/crack_onset_scan_quick.yaml \
+  --tag doe_week3_quick \
+  --max-runs 4 \
+  --max-cases 1 \
+  --min-notch-cycles-completed 1 \
+  --mech-regularization-values 1.0,2.0 \
+  --mech-solution-abs-limit-values 8,10 \
+  --mech-accept-rel-residual-values 0.008
+```
+If full scan budgets are tight, use fast numerical pre-screen:
+```bash
+python sim/tests/sweep_crack_onset_doe.py \
+  --base-config sim/configs/crack_onset_scan.yaml \
+  --tag doe_week3_budget_case1_fast \
+  --max-runs 2 \
+  --max-cases 1 \
+  --scan-timeout-s 180 \
+  --vc-cycles 2 \
+  --vc-cycle-points 20 \
+  --vc-mech-max-iters 20 \
+  --vc-mech-outer-max-iters 1 \
+  --vc-mech-tol 2e-4 \
+  --vc-mech-outer-tol 2e-5 \
+  --min-notch-cycles-completed 1 \
+  --mech-regularization-values 2.0,2.5 \
+  --mech-solution-abs-limit-values 10 \
+  --mech-accept-rel-residual-values 0.01
+```
+Then rescan shortlisted settings with:
+- `--base-config sim/configs/crack_onset_scan.yaml`
+- `--max-cases 3`
+- `--min-notch-cycles-completed 3`
+
+Practical note from 2026-02-07 DOE:
+- `reg=2.5, limit=10` may look good on single-case clipping but can fail `notch_medium_drive` crack-CG checks.
+- A better fast-budget bridge point was `reg=2.5, limit=8` (n=3 checks pass with lower clipping than `reg=2.0` baseline).
+- However, full `n=3` verification still showed `notch_medium_drive` crack-CG collapse (`320` nonconverged steps), so crack-branch tuning remains required before lock.
+- Crack-CG tuning outcome:
+  - relaxing `crack_tol` alone did not resolve medium-case collapse.
+  - increasing `crack_max_iters` to `1200` resolved medium-case crack-CG nonconvergence and restored full notch-3 gate pass.
 
 ## Acceptance Criteria (Phase-2)
 - `regress_phase2.py` passes.

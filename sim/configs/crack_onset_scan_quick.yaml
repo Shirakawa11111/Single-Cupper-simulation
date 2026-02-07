@@ -42,6 +42,7 @@ defaults:
     max_mechanical_not_accepted_steps: 48
     max_crack_cg_nonconverged_steps: 12
     max_nonfinite_count: 0
+    min_notch_cycles_completed: 1
 
 cases:
   - name: "quick_notch"
