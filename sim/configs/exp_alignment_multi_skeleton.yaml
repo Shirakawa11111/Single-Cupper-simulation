@@ -1,0 +1,25 @@
+defaults:
+  thresholds:
+    rmse_tau_max: 30.0
+    mae_tau_max: 25.0
+    rmse_gamma_max: 4.2e-3
+  limits:
+    max_runtime_warnings: 50
+    max_mechanical_not_accepted_steps: 160
+    max_crack_cg_nonconverged_steps: 40
+    max_nonfinite_count: 0
+  min_pass_count: 1
+
+conditions:
+  - name: lowamp_111_cycle1000
+    enabled: true
+    config: sim/configs/fatigue_lowamp_align_locked_v4.yaml
+    exp_folder: 20240917_-111_Cu_1e-3_4000_294K_001
+    cycle: 1000
+    axis: "-1,1,1"
+    stress_col: 1
+    strain_col: 0
+    exp_strain_scale: 1e-6
+    sim_stress_col: sig_xx_GPa
+    sim_strain_col: macro_strain
+    sim_stress_scale: 1000.0

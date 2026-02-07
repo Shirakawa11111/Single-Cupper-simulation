@@ -84,6 +84,13 @@ def main() -> int:
     )
     parser.add_argument("--run-seed-robustness", action="store_true")
     parser.add_argument(
+        "--seed-case-mode",
+        type=str,
+        default="pair",
+        choices=("pair", "full"),
+        help="Seed robustness mode: pair uses notch+negative pair, full uses all configured cases.",
+    )
+    parser.add_argument(
         "--seed-batches",
         type=str,
         default="41,42,43;44,45,46",
@@ -175,6 +182,8 @@ def main() -> int:
                 "sim/configs/crack_onset_scan.yaml",
                 "--seeds",
                 seeds,
+                "--case-mode",
+                args.seed_case_mode,
                 "--notch-case",
                 "control_notch_mild",
                 "--negative-case",
@@ -207,6 +216,7 @@ def main() -> int:
         "duration_s": (finished - started).total_seconds(),
         "profile": args.profile,
         "run_seed_robustness": args.run_seed_robustness,
+        "seed_case_mode": args.seed_case_mode if args.run_seed_robustness else None,
         "seed_batches": args.seed_batches if args.run_seed_robustness else None,
         "out_root": str(out_root),
         "tasks": records,

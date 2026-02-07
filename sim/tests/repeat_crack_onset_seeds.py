@@ -50,10 +50,24 @@ def _extract_case(summary: dict[str, Any], name: str) -> dict[str, Any] | None:
     return None
 
 
+def _extract_all_cases(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = summary.get("cases", [])
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if isinstance(r, dict)]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Repeat crack-onset scans over random seeds.")
     parser.add_argument("--base-config", type=Path, default=Path("sim/configs/crack_onset_scan.yaml"))
     parser.add_argument("--seeds", type=str, default="41,42,43")
+    parser.add_argument(
+        "--case-mode",
+        type=str,
+        choices=("pair", "full"),
+        default="pair",
+        help="pair: only notch/negative selected cases; full: all cases from config.",
+    )
     parser.add_argument("--notch-case", type=str, default="control_notch_mild")
     parser.add_argument("--negative-case", type=str, default="no_notch_control")
     parser.add_argument("--out-root", type=Path, default=None)
@@ -82,13 +96,19 @@ def main() -> None:
     if not isinstance(cases, list):
         raise ValueError("Base config cases must be a list.")
 
-    # Keep only the two target cases for faster robustness checks.
-    keep = {args.notch_case, args.negative_case}
-    selected_cases = [c for c in cases if isinstance(c, dict) and c.get("name") in keep]
-    if len(selected_cases) != 2:
-        raise ValueError(
-            f"Expected to find exactly 2 selected cases ({args.notch_case}, {args.negative_case})."
-        )
+    selected_cases: list[dict[str, Any]]
+    if args.case_mode == "pair":
+        # Keep only the two target cases for faster robustness checks.
+        keep = {args.notch_case, args.negative_case}
+        selected_cases = [c for c in cases if isinstance(c, dict) and c.get("name") in keep]
+        if len(selected_cases) != 2:
+            raise ValueError(
+                f"Expected to find exactly 2 selected cases ({args.notch_case}, {args.negative_case})."
+            )
+    else:
+        selected_cases = [c for c in cases if isinstance(c, dict)]
+        if not selected_cases:
+            raise ValueError("No valid cases found in base config.")
 
     rows: list[dict[str, Any]] = []
     t0 = perf_counter()
@@ -135,30 +155,68 @@ def main() -> None:
         summary_path = scan_out / "summary.json"
         if summary_path.exists():
             data = json.loads(summary_path.read_text(encoding="utf-8"))
-            notch = _extract_case(data, args.notch_case) or {}
-            neg = _extract_case(data, args.negative_case) or {}
+            passed = bool(data.get("passed", False))
+            checks_passed = bool(data.get("checks_passed", False))
             row.update(
                 {
-                    "passed": bool(data.get("passed", False)),
-                    "checks_passed": bool(data.get("checks_passed", False)),
+                    "passed": passed,
+                    "checks_passed": checks_passed,
                     "onset_cases": data.get("onset_cases"),
                     "cases_total": data.get("cases_total"),
-                    "notch_onset": notch.get("onset"),
-                    "notch_onset_length": notch.get("onset_length"),
-                    "notch_checks_ok": notch.get("checks_ok"),
-                    "notch_cycles_completed": notch.get("cycles_completed"),
-                    "negative_onset": neg.get("onset"),
-                    "negative_checks_ok": neg.get("checks_ok"),
-                    "negative_cycles_completed": neg.get("cycles_completed"),
                 }
             )
-            row["seed_gate_pass"] = bool(
-                row.get("passed")
-                and row.get("notch_onset")
-                and row.get("notch_checks_ok")
-                and (row.get("negative_onset") is False)
-                and row.get("negative_checks_ok")
-            )
+            if args.case_mode == "pair":
+                notch = _extract_case(data, args.notch_case) or {}
+                neg = _extract_case(data, args.negative_case) or {}
+                row.update(
+                    {
+                        "notch_onset": notch.get("onset"),
+                        "notch_onset_length": notch.get("onset_length"),
+                        "notch_checks_ok": notch.get("checks_ok"),
+                        "notch_cycles_completed": notch.get("cycles_completed"),
+                        "negative_onset": neg.get("onset"),
+                        "negative_checks_ok": neg.get("checks_ok"),
+                        "negative_cycles_completed": neg.get("cycles_completed"),
+                    }
+                )
+                row["seed_gate_pass"] = bool(
+                    passed
+                    and checks_passed
+                    and row.get("notch_onset")
+                    and row.get("notch_checks_ok")
+                    and (row.get("negative_onset") is False)
+                    and row.get("negative_checks_ok")
+                )
+            else:
+                all_cases = _extract_all_cases(data)
+                notch_rows = [r for r in all_cases if bool(r.get("notch_case", False))]
+                neg_rows = [r for r in all_cases if not bool(r.get("notch_case", False))]
+                notch_onset_all = bool(notch_rows) and all(r.get("onset") is True for r in notch_rows)
+                notch_checks_all = bool(notch_rows) and all(bool(r.get("checks_ok")) for r in notch_rows)
+                neg_onset_all_false = bool(neg_rows) and all(r.get("onset") is False for r in neg_rows)
+                neg_checks_all = bool(neg_rows) and all(bool(r.get("checks_ok")) for r in neg_rows)
+                notch_cycles_min = min(int(r.get("cycles_completed", 0)) for r in notch_rows) if notch_rows else None
+                neg_cycles_min = min(int(r.get("cycles_completed", 0)) for r in neg_rows) if neg_rows else None
+                row.update(
+                    {
+                        "notch_case_count": len(notch_rows),
+                        "negative_case_count": len(neg_rows),
+                        "notch_onset_all": notch_onset_all,
+                        "notch_checks_all": notch_checks_all,
+                        "notch_cycles_min": notch_cycles_min,
+                        "negative_onset_all_false": neg_onset_all_false,
+                        "negative_checks_all": neg_checks_all,
+                        "negative_cycles_min": neg_cycles_min,
+                    }
+                )
+                row["seed_gate_pass"] = bool(
+                    passed
+                    and checks_passed
+                    and notch_onset_all
+                    and notch_checks_all
+                    and neg_onset_all_false
+                    and neg_checks_all
+                )
         rows.append(row)
 
     elapsed = perf_counter() - t0
@@ -180,6 +238,7 @@ def main() -> None:
         "base_config": str(args.base_config),
         "out_root": str(out_root),
         "seeds": seeds,
+        "case_mode": args.case_mode,
         "notch_case": args.notch_case,
         "negative_case": args.negative_case,
         "duration_s": elapsed,

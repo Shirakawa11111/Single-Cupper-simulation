@@ -163,6 +163,23 @@ def main() -> int:
         default=4.2e-3,
         help="RMSE gamma threshold passed to regress_exp_alignment.py.",
     )
+    parser.add_argument(
+        "--with-energy-gate",
+        action="store_true",
+        help="Run energy-consistency regression gate as part of phase-2.",
+    )
+    parser.add_argument(
+        "--energy-gate-config",
+        type=Path,
+        default=Path("sim/configs/fatigue_lowamp_align_locked_v4.yaml"),
+        help="Config path for energy-consistency gate.",
+    )
+    parser.add_argument(
+        "--energy-gate-min-cycles",
+        type=int,
+        default=5,
+        help="Minimum cycle count passed to regress_energy_consistency.py.",
+    )
     parser.add_argument("--skip-phase1-suite", action="store_true")
     args = parser.parse_args()
 
@@ -269,6 +286,28 @@ def main() -> int:
         ]
         tasks.append(("exp_alignment", exp_cmd, exp_out / "summary.json"))
 
+    if args.with_energy_gate:
+        energy_out = out_dir / "energy_gate"
+        energy_cmd = [
+            py,
+            "sim/tests/regress_energy_consistency.py",
+            "--config",
+            str(args.energy_gate_config),
+            "--out",
+            str(energy_out / "summary.json"),
+            "--min-cycles",
+            str(args.energy_gate_min_cycles),
+            "--max-runtime-warnings",
+            str(args.max_runtime_warnings),
+            "--max-mechanical-not-accepted-steps",
+            str(args.max_mechanical_not_accepted_steps if args.max_mechanical_not_accepted_steps is not None else 160),
+            "--max-crack-cg-nonconverged-steps",
+            str(args.max_crack_cg_nonconverged_steps if args.max_crack_cg_nonconverged_steps is not None else 40),
+            "--max-nonfinite-count",
+            str(args.max_nonfinite_count),
+        ]
+        tasks.append(("energy_gate", energy_cmd, energy_out / "summary.json"))
+
     started_at = datetime.now()
     results: list[TaskResult] = []
     for name, cmd, summary_json in tasks:
@@ -297,6 +336,9 @@ def main() -> int:
         "exp_alignment_rmse_tau_max": args.exp_alignment_rmse_tau_max,
         "exp_alignment_mae_tau_max": args.exp_alignment_mae_tau_max,
         "exp_alignment_rmse_gamma_max": args.exp_alignment_rmse_gamma_max,
+        "with_energy_gate": args.with_energy_gate,
+        "energy_gate_config": str(args.energy_gate_config),
+        "energy_gate_min_cycles": args.energy_gate_min_cycles,
         "passed": passed,
         "total_runtime_warning_count": total_runtime_warnings,
         "tasks": [

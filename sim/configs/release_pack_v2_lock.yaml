@@ -1,0 +1,23 @@
+release_pack: v2
+updated: "2026-02-08"
+
+locked_configs:
+  crack_onset_scan: sim/configs/crack_onset_scan.yaml
+  exp_alignment: sim/configs/fatigue_lowamp_align_locked_v4.yaml
+  energy_gate: sim/configs/fatigue_lowamp_align_locked_v4.yaml
+  seed_repeat: sim/configs/crack_onset_scan.yaml
+  multi_alignment_skeleton: sim/configs/exp_alignment_multi_skeleton.yaml
+
+thresholds:
+  max_runtime_warnings: 50
+  max_mechanical_not_accepted_steps: 160
+  max_crack_cg_nonconverged_steps: 20
+  max_nonfinite_count: 0
+  exp_alignment_rmse_tau_max: 30.0
+  exp_alignment_mae_tau_max: 25.0
+  exp_alignment_rmse_gamma_max: 4.2e-3
+  energy_gate_min_cycles: 5
+
+seed_batches:
+  - [41, 42, 43]
+  - [44, 45, 46]
