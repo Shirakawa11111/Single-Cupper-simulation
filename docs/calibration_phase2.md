@@ -55,6 +55,22 @@ python sim/tests/scan_crack_onset.py \
 5. Record accepted set in `docs/parameter_register.md`:
 - add date, commit hash, config path, and fit notes.
 
+### Experiment Alignment Gate (Week-3 Lock)
+Use one command to run the low-amplitude alignment config and gate against
+experiment mismatch + solver stability thresholds:
+```bash
+python sim/tests/regress_exp_alignment.py \
+  --config sim/configs/fatigue_lowamp_align_locked_v3.yaml \
+  --out sim/tests/regress_runs/$(date +%F)/exp_alignment_gate_v3/summary.json
+```
+Current default thresholds in `regress_exp_alignment.py`:
+- `rmse_tau_MPa <= 30`
+- `mae_tau_MPa <= 25`
+- `rmse_gamma <= 4.2e-3`
+- `mechanical_not_accepted_steps <= 160`
+- `crack_cg_nonconverged_steps <= 40`
+- `nonfinite_count == 0`
+
 ### Optional: Week-3 DOE Pre-Screen
 Use DOE pre-screen to narrow solver candidates before full `n=3` notch scan:
 ```bash
@@ -111,6 +127,6 @@ Practical note from 2026-02-07 DOE:
 - Experimental overlay mismatch reduced and documented with plots/metrics.
 - Mechanical branch should satisfy `max_mechanical_not_accepted_steps <= 160` under the current
   unilateral setup (`mech_unilateral_mode=volumetric`, `mech_preconditioner=jacobi`,
-  `mech_clip_solution_on_limit=true`, `mech_regularization=2.0`).
+  `mech_clip_solution_on_limit=true`, `mech_regularization=2.5`).
 - Crack branch should satisfy `max_crack_cg_nonconverged_steps <= 20` under the same scan setup.
 - Current trajectory-alignment lock uses `crack_length_threshold=0.995` and `failure_threshold=0.999`.
