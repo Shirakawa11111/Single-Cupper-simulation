@@ -134,6 +134,35 @@ def main() -> int:
         default=None,
         help="Override notch-case minimum cycles_completed for scan gate.",
     )
+    parser.add_argument(
+        "--with-exp-alignment",
+        action="store_true",
+        help="Run experiment-alignment regression gate as part of phase-2.",
+    )
+    parser.add_argument(
+        "--exp-alignment-config",
+        type=Path,
+        default=Path("sim/configs/fatigue_lowamp_align_locked_v3.yaml"),
+        help="Config path for experiment-alignment gate.",
+    )
+    parser.add_argument(
+        "--exp-alignment-rmse-tau-max",
+        type=float,
+        default=30.0,
+        help="RMSE tau threshold passed to regress_exp_alignment.py.",
+    )
+    parser.add_argument(
+        "--exp-alignment-mae-tau-max",
+        type=float,
+        default=25.0,
+        help="MAE tau threshold passed to regress_exp_alignment.py.",
+    )
+    parser.add_argument(
+        "--exp-alignment-rmse-gamma-max",
+        type=float,
+        default=4.2e-3,
+        help="RMSE gamma threshold passed to regress_exp_alignment.py.",
+    )
     parser.add_argument("--skip-phase1-suite", action="store_true")
     args = parser.parse_args()
 
@@ -214,6 +243,32 @@ def main() -> int:
         )
     tasks.append(("crack_onset_scan", scan_cmd, scan_out / "summary.json"))
 
+    if args.with_exp_alignment:
+        exp_out = out_dir / "exp_alignment"
+        exp_cmd = [
+            py,
+            "sim/tests/regress_exp_alignment.py",
+            "--config",
+            str(args.exp_alignment_config),
+            "--out",
+            str(exp_out / "summary.json"),
+            "--rmse-tau-max",
+            str(args.exp_alignment_rmse_tau_max),
+            "--mae-tau-max",
+            str(args.exp_alignment_mae_tau_max),
+            "--rmse-gamma-max",
+            str(args.exp_alignment_rmse_gamma_max),
+            "--max-runtime-warnings",
+            str(args.max_runtime_warnings),
+            "--max-mechanical-not-accepted-steps",
+            str(args.max_mechanical_not_accepted_steps if args.max_mechanical_not_accepted_steps is not None else 160),
+            "--max-crack-cg-nonconverged-steps",
+            str(args.max_crack_cg_nonconverged_steps if args.max_crack_cg_nonconverged_steps is not None else 40),
+            "--max-nonfinite-count",
+            str(args.max_nonfinite_count),
+        ]
+        tasks.append(("exp_alignment", exp_cmd, exp_out / "summary.json"))
+
     started_at = datetime.now()
     results: list[TaskResult] = []
     for name, cmd, summary_json in tasks:
@@ -237,6 +292,11 @@ def main() -> int:
         "scan_config": str(args.scan_config),
         "scan_min_onset_cases": args.scan_min_onset_cases,
         "scan_min_notch_cycles_completed": args.scan_min_notch_cycles_completed,
+        "with_exp_alignment": args.with_exp_alignment,
+        "exp_alignment_config": str(args.exp_alignment_config),
+        "exp_alignment_rmse_tau_max": args.exp_alignment_rmse_tau_max,
+        "exp_alignment_mae_tau_max": args.exp_alignment_mae_tau_max,
+        "exp_alignment_rmse_gamma_max": args.exp_alignment_rmse_gamma_max,
         "passed": passed,
         "total_runtime_warning_count": total_runtime_warnings,
         "tasks": [
