@@ -11,7 +11,7 @@ Updates:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import List, Tuple
@@ -113,6 +113,9 @@ def run_virtual_cycles(
     slip_exponent: float | None = None,     # 覆盖滑移指数 n
     h_iso: float | None = None,             # 覆盖各向同性硬化
     h_gnd: float | None = None,             # 覆盖 GND 硬化项
+    c11: float | None = None,               # 覆盖铜 c11（无量纲）
+    c12: float | None = None,               # 覆盖铜 c12（无量纲）
+    c44: float | None = None,               # 覆盖铜 c44（无量纲）
     mech_max_iters: int | None = None,      # 机械求解最大迭代
     mech_tol: float | None = None,          # 机械求解收敛阈值
     mech_outer_max_iters: int | None = None, # 单向分裂外循环
@@ -165,7 +168,16 @@ def run_virtual_cycles(
     periodic = grid_periodic or (True, True, False)
     grid = GridSpec(shape=shape, spacing=spacing, periodic=periodic)
     
-    copper = CopperParameters()
+    copper_overrides: dict[str, float] = {}
+    if c11 is not None:
+        copper_overrides["c11"] = float(c11)
+    if c12 is not None:
+        copper_overrides["c12"] = float(c12)
+    if c44 is not None:
+        copper_overrides["c44"] = float(c44)
+    if any(v <= 0.0 for v in copper_overrides.values()):
+        raise ValueError("c11/c12/c44 overrides must be positive.")
+    copper = replace(CopperParameters(), **copper_overrides)
     base_fracture = FractureParameters()
     fracture = FractureParameters(
         gc=base_fracture.gc * toughness_scale,
