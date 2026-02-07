@@ -16,12 +16,13 @@ defaults:
       - [7.2, 8.8]
       - [2.8, 5.2]
     notch_crack_value: 0.6
-    crack_length_threshold: 0.4
+    crack_length_threshold: 0.995
+    failure_threshold: 0.999
     mech_max_iters: 80
     mech_outer_max_iters: 2
     mech_tol: 5.0e-5
     mech_outer_tol: 5.0e-6
-    mech_regularization: 1.0
+    mech_regularization: 2.0
     mech_accept_rel_residual: 1.0e-2
     mech_accept_incomplete_cg: true
     mech_enable_gmres_fallback: false
@@ -38,7 +39,7 @@ defaults:
     max_runtime_warnings: 50
     max_mechanical_cg_failures: 1300
     max_mechanical_not_accepted_steps: 160
-    max_crack_cg_nonconverged_steps: 80
+    max_crack_cg_nonconverged_steps: 20
     max_nonfinite_count: 0
 
 cases:

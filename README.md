@@ -78,7 +78,7 @@ python sim/tests/scan_crack_onset.py \
   --config sim/configs/crack_onset_scan.yaml \
   --max-runtime-warnings 50 \
   --max-mechanical-not-accepted-steps 160 \
-  --max-crack-cg-nonconverged-steps 80 \
+  --max-crack-cg-nonconverged-steps 20 \
   --max-nonfinite-count 0
 ```
 
@@ -88,7 +88,7 @@ python sim/tests/regress_phase2.py \
   --strict \
   --max-runtime-warnings 50 \
   --max-mechanical-not-accepted-steps 160 \
-  --max-crack-cg-nonconverged-steps 80 \
+  --max-crack-cg-nonconverged-steps 20 \
   --scan-config sim/configs/crack_onset_scan.yaml
 ```
 
@@ -105,7 +105,7 @@ python sim/tests/regress_phase2.py \
 说明：
 - `run_virtual_cycle_config.py` 现会输出 `runtime_warning_count`、`runtime_warning_items` 与 `stability_diagnostics`（含 mechanical/crack CG 与 nonfinite 计数）。
 - `scan_crack_onset.py` 会输出 `summary.json` + `summary.csv`，并区分 `onset_length`（长度主判据）与 `onset_mean_aux`（均值辅助判据）。
-- `sim/configs/crack_onset_scan.yaml` 默认使用 `crack_length_threshold=0.4`，可避免 `crack_length` 长时间恒零。
+- `sim/configs/crack_onset_scan.yaml` 默认使用 `crack_length_threshold=0.995` + `failure_threshold=0.999`，用于恢复 length-led onset 判据并支持 post-onset 轨迹对齐。
 - 默认机械策略切到 `volumetric + jacobi`，并启用 `mech_clip_solution_on_limit=true`（解超限裁剪而非直接拒收）。
 - 标定闭环执行模板见 `docs/calibration_phase2.md`。
 
@@ -333,3 +333,39 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
 - 裂纹 CG 阈值收紧：
   - 将 `max_crack_cg_nonconverged_steps` 从 `320` 收紧到 `80`。
   - 同一全扫描中 notch 三 case 分别为 `52/42/40`，满足收紧阈值。
+
+### 验证记录（2026-02-07，reg=2.0 + length-led 回正，首轮）
+- 全量裂纹萌生扫描（4 cases，`cg<=20`）：
+  `sim/tests/regress_runs/2026-02-07/crack_onset_scan_reg2_len0995_fail0995_cg20_full/summary.json`
+- 参数落点（首轮）：
+  - `mech_regularization=2.0`
+  - `crack_length_threshold=0.995`
+  - `failure_threshold=0.995`
+  - `max_crack_cg_nonconverged_steps=20`
+- 关键结果（notch 三 case）：
+  - `mechanical_solution_clipped_steps=22/23/21`（目标 `<80/160` 达成）
+  - `mechanical_not_accepted_steps=0`（保持 `<160`）
+  - `crack_cg_nonconverged_steps=7/6/7`（`<=20` 达成）
+  - `onset_length=true` 且 `onset_mean_aux=true`（长度主判据恢复）
+- Phase-2 对齐回归：
+  `sim/tests/regress_runs/2026-02-07/phase2_gate_reg2_len0995_fail0995_cg20/summary.json`（`passed=true`）。
+
+### 验证记录（2026-02-07，post-onset 轨迹对齐第 2 轮）
+- 当前锁定参数（配置默认）：
+  - `mech_regularization=2.0`
+  - `crack_length_threshold=0.995`
+  - `failure_threshold=0.999`
+  - `max_crack_cg_nonconverged_steps=20`
+- `failure_threshold` 扫描（notch 3 case）：
+  - `fail=0.998`：`sim/tests/regress_runs/2026-02-07/crack_onset_scan_reg2_len0995_fail0.998_n3/summary.json`
+    - mild/medium 可达 4 周期，aggressive 仍 2 周期。
+  - `fail=0.999`：`sim/tests/regress_runs/2026-02-07/crack_onset_scan_reg2_len0995_fail0.999_n3/summary.json`
+    - 三个 notch case 均达 4 周期。
+- 全量 4 case 复核（`cg<=20`）：
+  `sim/tests/regress_runs/2026-02-07/crack_onset_scan_reg2_len0995_fail0999_cg20_full/summary.json`
+  - notch 三 case：`cycles_completed=4`、`onset_length=true`
+  - `mechanical_solution_clipped_steps=22/25/25`（`steps=320`）
+  - `mechanical_not_accepted_steps=0`
+  - `crack_cg_nonconverged_steps=7/6/7`
+- Phase-2 对齐回归（fail=0.999）：
+  `sim/tests/regress_runs/2026-02-07/phase2_gate_reg2_len0995_fail0999_cg20/summary.json`（`passed=true`）。

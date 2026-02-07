@@ -118,7 +118,7 @@ Numerical notes
     - `max_runtime_warnings=50`
     - `max_mechanical_cg_failures=1300`
     - `max_mechanical_not_accepted_steps=160` (current config target)
-    - `max_crack_cg_nonconverged_steps=80` (current config target)
+    - `max_crack_cg_nonconverged_steps=20` (current config target)
     - `max_nonfinite_count=0`
 - Unilateral 分支预条件/算子替换实验（2026-02-06）:
   - baseline matrix (`unilateral_matrix_l10`): `spectral/volumetric × none/jacobi` 均 `mechanical_not_accepted_steps=320`.
@@ -126,19 +126,35 @@ Numerical notes
     - single-case 320-step: `crack_onset_aggressive_clip_320` => `mechanical_not_accepted_steps=0`
     - full 4-case scan: `crack_onset_scan_clip_full` => all cases `mechanical_not_accepted_steps=0`
     - scan criteria with `max_mechanical_not_accepted_steps=160` passes.
-- 降裁剪率专项（2026-02-07）:
-  - strengthened regularization strategy (`mech_regularization=1.0`) now used in:
-    - `sim/configs/crack_onset_scan.yaml`
-    - `sim/configs/crack_onset_aggressive_only.yaml`
-    - `sim/configs/crack_onset_scan_quick.yaml`
+- 降裁剪率 + 判据回正专项（2026-02-07）:
+  - strategy lock:
+    - `mech_regularization=2.0`
+    - `crack_length_threshold=0.995`
+    - `failure_threshold=0.999`
+    - `max_crack_cg_nonconverged_steps=20`
   - full scan verification:
-    - `sim/tests/regress_runs/2026-02-07/crack_onset_scan_full_v5_reg1/summary.json`
-    - notch cases: `mechanical_solution_clipped_steps=118/117/120` with `steps=160`
+    - `sim/tests/regress_runs/2026-02-07/crack_onset_scan_reg2_len0995_fail0999_cg20_full/summary.json`
+    - notch cases: `mechanical_solution_clipped_steps=22/25/25` (`steps=320`, ratio `<80/160` equivalent achieved)
     - all cases: `mechanical_not_accepted_steps=0`
-    - notch cases: `crack_cg_nonconverged_steps=52/42/40` (under tightened threshold 80)
+    - notch cases: `crack_cg_nonconverged_steps=7/6/7` (under tightened threshold 20)
+    - notch cases: `onset_length=true` (length-led restored)
+  - phase2 gate verification:
+    - `sim/tests/regress_runs/2026-02-07/phase2_gate_reg2_len0995_fail0999_cg20/summary.json` (`passed=true`)
+- post-onset trajectory calibration (round-2):
+  - threshold scan:
+    - `sim/tests/regress_runs/2026-02-07/crack_onset_scan_reg2_len0995_fail0.998_n3/summary.json`
+    - `sim/tests/regress_runs/2026-02-07/crack_onset_scan_reg2_len0995_fail0.999_n3/summary.json`
+  - selected lock (`failure_threshold=0.999`) full verification:
+    - `sim/tests/regress_runs/2026-02-07/crack_onset_scan_reg2_len0995_fail0999_cg20_full/summary.json`
+    - notch cases now all `cycles_completed=4`, while keeping:
+      - `mechanical_not_accepted_steps=0`
+      - `crack_cg_nonconverged_steps=7/6/7`
+      - `onset_length=true`
+  - gate verification:
+    - `sim/tests/regress_runs/2026-02-07/phase2_gate_reg2_len0995_fail0999_cg20/summary.json` (`passed=true`)
 - Residual risk:
-  - notch cases still show non-trivial clipping ratio (~74%-75% of simulated steps).
-  - next numerical target is reducing clipping dependency while keeping `max_mechanical_not_accepted_steps<160`.
+  - post-onset trajectory now reaches 4 cycles for notch cases, but crack_mean remains close to saturation (`~0.9968~0.9984`).
+  - next target should calibrate growth slope and saturation timing via notch geometry / toughness / load amplitude, not solver numerics.
 
 Open decisions / next steps
 - [Resolved for Phase-1] Physical reference mapping:
@@ -152,8 +168,9 @@ Open decisions / next steps
   - confirm whether high `mechanical_cg_failures` reflects true non-convergence vs expected null-space behavior.
   - if needed, add preconditioner/regularization or solver fallback for unilateral branch.
 - Continue tightening Phase-2 thresholds after solver improvements:
-  - keep `max_mechanical_not_accepted_steps=160` stable while reducing `mechanical_solution_clipped_steps`
-  - lower `max_crack_cg_nonconverged_steps` further from current `80` when crack operator convergence is improved.
+  - keep `max_mechanical_not_accepted_steps=160` stable while calibrating post-onset cycles.
+  - keep `max_crack_cg_nonconverged_steps<=20` as current gate baseline.
+  - with current setup, prefer `failure_threshold=0.999` for trajectory-alignment runs.
 
 Notes
 - accum_plastic is currently sum|gamma_s|; eps_eq can stay as output-only.

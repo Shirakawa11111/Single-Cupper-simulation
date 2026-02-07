@@ -35,7 +35,7 @@ python sim/tests/run_virtual_cycle_config.py \
   --config sim/configs/fatigue_lowamp.yaml \
   --max-runtime-warnings 50 \
   --max-mechanical-not-accepted-steps 160 \
-  --max-crack-cg-nonconverged-steps 80 \
+  --max-crack-cg-nonconverged-steps 20 \
   --max-nonfinite-count 0
 ```
 3. Compare simulation curve (`virtual_cycle_stress_strain.csv`) with experiment:
@@ -47,7 +47,7 @@ python sim/tests/scan_crack_onset.py \
   --config sim/configs/crack_onset_scan.yaml \
   --max-runtime-warnings 50 \
   --max-mechanical-not-accepted-steps 160 \
-  --max-crack-cg-nonconverged-steps 80 \
+  --max-crack-cg-nonconverged-steps 20 \
   --max-nonfinite-count 0
 ```
 5. Record accepted set in `docs/parameter_register.md`:
@@ -59,8 +59,11 @@ python sim/tests/scan_crack_onset.py \
 - At least 1 crack-onset case from `scan_crack_onset.py`.
 - Onset should be length-led: prefer `onset_length=true`; `onset_mean_aux` is auxiliary.
 - Negative control (`no_notch_control`) should keep `onset=false` while `checks_ok=true`.
+- For trajectory-alignment runs, notch cases should preferably reach `cycles_completed >= 3`
+  (current locked setup targets 4 cycles with `failure_threshold=0.999`).
 - Experimental overlay mismatch reduced and documented with plots/metrics.
 - Mechanical branch should satisfy `max_mechanical_not_accepted_steps <= 160` under the current
   unilateral setup (`mech_unilateral_mode=volumetric`, `mech_preconditioner=jacobi`,
-  `mech_clip_solution_on_limit=true`, `mech_regularization=1.0`).
-- Crack branch should satisfy `max_crack_cg_nonconverged_steps <= 80` under the same scan setup.
+  `mech_clip_solution_on_limit=true`, `mech_regularization=2.0`).
+- Crack branch should satisfy `max_crack_cg_nonconverged_steps <= 20` under the same scan setup.
+- Current trajectory-alignment lock uses `crack_length_threshold=0.995` and `failure_threshold=0.999`.
