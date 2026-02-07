@@ -56,6 +56,12 @@
 - `sim/configs/fatigue_lowamp.yaml`
 - `sim/configs/notch_gnd.yaml`
 
+## Phase-2 / Week-4 locked config set
+- `sim/configs/crack_onset_scan.yaml`
+- `sim/configs/fatigue_lowamp_align_locked_v4.yaml`
+- Week-4 release runner: `sim/tests/run_release_baseline_week4.py`
+- Week-4 release report template: `docs/templates/week4_release_report_template.md`
+
 ## Frozen physical constants (Phase-1)
 - `L0 = 1.0e-6 m` (code length unit to SI)
 - `sigma_ref = 168.4 GPa`
@@ -73,3 +79,6 @@
 - updated config YAML
 - updated regression summary under `sim/tests/regress_runs/<date>/...`
 - one-line reason in `HANDOFF.md`
+- If touching Week-4 locked configs, also update:
+- `docs/week4_release_baseline_pack_2026-02-07.md`
+- `WEEKLY_CHECKLIST.md`

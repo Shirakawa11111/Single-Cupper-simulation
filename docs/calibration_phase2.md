@@ -60,8 +60,21 @@ Use one command to run the low-amplitude alignment config and gate against
 experiment mismatch + solver stability thresholds:
 ```bash
 python sim/tests/regress_exp_alignment.py \
-  --config sim/configs/fatigue_lowamp_align_locked_v3.yaml \
-  --out sim/tests/regress_runs/$(date +%F)/exp_alignment_gate_v3/summary.json
+  --config sim/configs/fatigue_lowamp_align_locked_v4.yaml \
+  --out sim/tests/regress_runs/$(date +%F)/exp_alignment_gate_v4/summary.json
+```
+For one-command full gate (phase2 + crack onset + exp alignment):
+```bash
+python sim/tests/regress_phase2.py \
+  --strict \
+  --scan-config sim/configs/crack_onset_scan.yaml \
+  --with-exp-alignment \
+  --exp-alignment-config sim/configs/fatigue_lowamp_align_locked_v4.yaml \
+  --max-runtime-warnings 50 \
+  --max-mechanical-not-accepted-steps 160 \
+  --max-crack-cg-nonconverged-steps 20 \
+  --max-nonfinite-count 0 \
+  --out sim/tests/regress_runs/$(date +%F)/phase2_gate_with_exp_full_locked
 ```
 Current default thresholds in `regress_exp_alignment.py`:
 - `rmse_tau_MPa <= 30`
@@ -70,6 +83,16 @@ Current default thresholds in `regress_exp_alignment.py`:
 - `mechanical_not_accepted_steps <= 160`
 - `crack_cg_nonconverged_steps <= 40`
 - `nonfinite_count == 0`
+- 2026-02-07 full-gate snapshot:
+  - `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_full_locked/summary.json` (`passed=true`)
+  - `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_full_locked/exp_alignment/summary.json`
+    (`rmse_tau_MPa=29.391`, `mae_tau_MPa=23.912`, `rmse_gamma=3.909e-3`)
+- 2026-02-07 week-4 sweep update:
+  - `sim/tests/sweep_exp_alignment.py` found best around `c11=0.58`, `strain_scale=0.99`
+  - new lock config: `sim/configs/fatigue_lowamp_align_locked_v4.yaml`
+  - verify: `sim/tests/regress_runs/2026-02-07/exp_alignment_gate_v4/summary.json`
+    (`rmse_tau_MPa=28.447`, `mae_tau_MPa=23.181`, `rmse_gamma=3.889e-3`)
+  - chain check: `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_v4_skip_phase1/summary.json` (`passed=true`)
 
 ### Optional: Week-3 DOE Pre-Screen
 Use DOE pre-screen to narrow solver candidates before full `n=3` notch scan:
@@ -130,3 +153,40 @@ Practical note from 2026-02-07 DOE:
   `mech_clip_solution_on_limit=true`, `mech_regularization=2.5`).
 - Crack branch should satisfy `max_crack_cg_nonconverged_steps <= 20` under the same scan setup.
 - Current trajectory-alignment lock uses `crack_length_threshold=0.995` and `failure_threshold=0.999`.
+
+## Week-4 Seed Robustness Check
+Run seed-repeated two-case scan to verify:
+- notch case remains onset-positive
+- negative control remains onset-negative
+
+```bash
+python sim/tests/repeat_crack_onset_seeds.py \
+  --base-config sim/configs/crack_onset_scan.yaml \
+  --seeds 41,42,43 \
+  --notch-case control_notch_mild \
+  --negative-case no_notch_control \
+  --out-root sim/tests/regress_runs/$(date +%F)/crack_onset_seed_repeat_week4_n2_s41_43 \
+  --max-runtime-warnings 50 \
+  --max-mechanical-not-accepted-steps 160 \
+  --max-crack-cg-nonconverged-steps 20 \
+  --max-nonfinite-count 0
+```
+
+2026-02-07 round-1 record:
+- batch A: `sim/tests/regress_runs/2026-02-07/crack_onset_seed_repeat_week4_n2_s41_43/summary.json` (`3/3`)
+- batch B: `sim/tests/regress_runs/2026-02-07/crack_onset_seed_repeat_week4_n2_s44_46/summary.json` (`3/3`)
+- combined: `seed_gate_pass=6/6`
+
+## Week-4 Release Baseline Bundle
+Use one script to package gate + optional seed robustness:
+```bash
+python sim/tests/run_release_baseline_week4.py \
+  --profile full \
+  --run-seed-robustness \
+  --seed-batches "41,42,43;44,45,46" \
+  --out-root sim/tests/regress_runs/$(date +%F)/release_baseline_week4_full
+```
+
+See:
+- `docs/week4_release_baseline_pack_2026-02-07.md`
+- `docs/templates/week4_release_report_template.md`

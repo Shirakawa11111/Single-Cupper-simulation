@@ -98,6 +98,7 @@ def run_virtual_cycles(
     crack_length_axis: int = 0,             # 裂纹长度统计轴
     cycle_points: int | None = None,        # 每个完整循环的离散点数（覆盖 segment_steps）
     orientation_vector: tuple[float, float, float] = (1.0, 1.0, 1.0),  # 单晶取向，默认 [111]
+    random_seed: int = 42,                  # 随机种子（结构噪声/缺陷播种与初始化）
     grid_shape: tuple[int, int, int] | None = None,
     grid_spacing: tuple[float, float, float] | None = None,
     grid_periodic: tuple[bool, bool, bool] | None = None,
@@ -254,7 +255,7 @@ def run_virtual_cycles(
         defect_config=defect_config,
         orientation_vector=orientation_vector,
     )
-    structure = builder.build(seed=42)
+    structure = builder.build(seed=int(random_seed))
 
     # 可选：预置 notch/裂纹种子
     if notch_box is not None:
@@ -319,7 +320,7 @@ def run_virtual_cycles(
         solver = AlternatingSolver(
             coupling, energy, mechanical, pfc, solver_cfg, mu_extra_from_stress=mu_extra, grain_mask=structure.grain_mask
         )
-        solver.initialize_state(structure.orientation, seed=42)
+        solver.initialize_state(structure.orientation, seed=int(random_seed))
         for key, value in structure.fields.items():
             solver.state[key] = value.copy()
         solver.state["history"] = np.zeros_like(structure.fields["psi"])
@@ -369,7 +370,7 @@ def run_virtual_cycles(
     solver = AlternatingSolver(
         coupling, energy, mechanical, pfc, solver_cfg, mu_extra_from_stress=mu_extra, grain_mask=structure.grain_mask
     )
-    solver.initialize_state(structure.orientation, seed=42)
+    solver.initialize_state(structure.orientation, seed=int(random_seed))
     for key, value in structure.fields.items():
         solver.state[key] = value.copy()
     solver.state["history"] = np.zeros_like(structure.fields["psi"])

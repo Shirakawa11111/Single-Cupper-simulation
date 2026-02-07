@@ -93,6 +93,19 @@ python sim/tests/regress_phase2.py \
   --scan-config sim/configs/crack_onset_scan.yaml
 ```
 
+Phase-2 + 实验对齐一体门禁（当前主推荐）：
+```bash
+python sim/tests/regress_phase2.py \
+  --strict \
+  --scan-config sim/configs/crack_onset_scan.yaml \
+  --with-exp-alignment \
+  --exp-alignment-config sim/configs/fatigue_lowamp_align_locked_v4.yaml \
+  --max-runtime-warnings 50 \
+  --max-mechanical-not-accepted-steps 160 \
+  --max-crack-cg-nonconverged-steps 20 \
+  --max-nonfinite-count 0
+```
+
 快速烟测（小网格，开发时）：
 ```bash
 python sim/tests/regress_phase2.py \
@@ -127,6 +140,15 @@ python sim/tests/sweep_crack_onset_doe.py \
 - `sim/configs/crack_onset_scan.yaml` 现锁定 `crack_max_iters=1200`，用于抑制 `notch_medium_drive` 的 crack-CG 非收敛高频问题。
 - 默认机械策略切到 `volumetric + jacobi`，并启用 `mech_clip_solution_on_limit=true`（解超限裁剪而非直接拒收）。
 - 标定闭环执行模板见 `docs/calibration_phase2.md`。
+- Week-4 对齐参数小扫描工具：`sim/tests/sweep_exp_alignment.py`。
+- Week-4 第一轮对齐报告：`docs/week4_alignment_round1_2026-02-07.md`。
+- Week-4 seed 稳健性复验工具：`sim/tests/repeat_crack_onset_seeds.py`。
+- Week-4 seed 稳健性报告：`docs/week4_seed_robustness_round1_2026-02-07.md`。
+- Week-4 发布基线一键入口：`sim/tests/run_release_baseline_week4.py`。
+- Week-4 发布基线说明：`docs/week4_release_baseline_pack_2026-02-07.md`。
+- 本周任务跟踪见 `WEEKLY_CHECKLIST.md`。
+- 2026-02-07 全量一体门禁通过记录：
+  `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_full_locked/summary.json`（`passed=true`）。
 
 ## COMSOL 训练/标定（可选）
 本项目的力学、塑性与裂纹部分是自定义求解器，可用 COMSOL 作为“高保真参考”来做参数标定或对齐训练。推荐流程：

@@ -142,7 +142,7 @@ def main() -> int:
     parser.add_argument(
         "--exp-alignment-config",
         type=Path,
-        default=Path("sim/configs/fatigue_lowamp_align_locked_v3.yaml"),
+        default=Path("sim/configs/fatigue_lowamp_align_locked_v4.yaml"),
         help="Config path for experiment-alignment gate.",
     )
     parser.add_argument(

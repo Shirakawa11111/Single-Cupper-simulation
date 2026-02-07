@@ -1,13 +1,61 @@
 # Handoff Notes
 
 Project path: /Users/bojingkai/Desktop/单晶铜拉伸模拟
-Date: 2026-02-06
-Current branch/commit: main @ f71fab8 (Phase-2 stability gate + unilateral diagnostics)
+Date: 2026-02-07
+Current branch/commit: main @ ee98a67 (phase2 + experiment alignment gate integration)
 
 Status
 - Working tree is dirty with many generated artifacts (pycache, VTKs, test runs). Do not commit these.
 - Use git status -sb to inspect; large untracked trees live under sim/tests/runs and sim/tests/regress_runs.
 - Phase-1 reproducibility scaffolding is now in repo: `.gitignore` hygiene rules, root `requirements*.txt`, config-driven runners, and docs under `docs/`.
+- Weekly progress checklist is tracked in `WEEKLY_CHECKLIST.md`.
+
+Latest verification snapshot (2026-02-07, full chain)
+- One-command full gate (strict + crack scan + experiment alignment):
+  - `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_full_locked/summary.json`
+  - result: `passed=true`, `total_runtime_warning_count=0`
+- Crack-onset core metrics:
+  - `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_full_locked/crack_onset_scan/summary.json`
+  - `onset_cases=3/4`, `checks_passed=true`
+  - notch clipping steps: `22/31/25` (total `78/960`, `<80/160` target met)
+  - `mechanical_not_accepted_steps=0` for all cases
+  - notch crack-CG nonconverged: `7/6/6` (under `20`)
+- Experiment alignment core metrics:
+  - `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_full_locked/exp_alignment/summary.json`
+  - `rmse_tau_MPa=29.391`, `mae_tau_MPa=23.912`, `rmse_gamma=3.909e-3`
+  - stability counters all zero (`mechanical_not_accepted_steps=0`, `crack_cg_nonconverged_steps=0`, `nonfinite_count=0`)
+
+Week-4 progress (2026-02-07, completed items 1-3)
+- new sweep helper:
+  - `sim/tests/sweep_exp_alignment.py`
+- round-1 sweep outputs:
+  - `sim/tests/regress_runs/2026-02-07/exp_alignment_sweep_week4_round1/summary.json`
+  - `sim/tests/regress_runs/2026-02-07/exp_alignment_sweep_week4_round1/results.csv`
+  - best candidate: `c11=0.58`, `strain_scale=0.99`
+- new lock config:
+  - `sim/configs/fatigue_lowamp_align_locked_v4.yaml`
+- `sim/tests/regress_phase2.py` default exp-alignment config switched to v4.
+- v4 gate check:
+  - `sim/tests/regress_runs/2026-02-07/exp_alignment_gate_v4/summary.json`
+  - metrics: `rmse_tau_MPa=28.447`, `mae_tau_MPa=23.181`, `rmse_gamma=3.889e-3`
+  - stability counters all zero
+- phase2 chain check (skip phase1):
+  - `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_v4_skip_phase1/summary.json`
+  - result: `passed=true`, `total_runtime_warning_count=0`
+- seed robustness (week-4 item-2):
+  - code:
+    - `sim/tests/virtual_cycle.py` now supports `random_seed`
+    - `sim/tests/repeat_crack_onset_seeds.py` for seed-repeat scan
+  - batch A:
+    - `sim/tests/regress_runs/2026-02-07/crack_onset_seed_repeat_week4_n2_s41_43/summary.json` (`3/3`)
+  - batch B:
+    - `sim/tests/regress_runs/2026-02-07/crack_onset_seed_repeat_week4_n2_s44_46/summary.json` (`3/3`)
+  - combined:
+    - `seed_gate_pass=6/6` (notch onset true, negative control onset false, checks passed)
+- release baseline pack (week-4 item-3):
+  - runner: `sim/tests/run_release_baseline_week4.py`
+  - pack doc: `docs/week4_release_baseline_pack_2026-02-07.md`
+  - report template: `docs/templates/week4_release_report_template.md`
 
 What was added recently (summary)
 - Multi-slip plasticity state variables (gamma_s, chi_s, tau_c) and flow rule; plastic_vec from slip-rate contributions.
