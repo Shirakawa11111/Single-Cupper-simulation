@@ -662,6 +662,30 @@ class FreeEnergy:
         energy = 0.5 * (self.pfc.pfc_params.r * psi * psi + psi * operator_psi) + self.pfc.pfc_params.u * psi**4 / 4
         return np.nan_to_num(energy)
 
+    def energy_density_components(
+        self,
+        strain: Array,
+        crack: Array,
+        psi: Array,
+        stiffness: Array,
+        plastic_eq: Array | None = None,
+        grain_mask: Array | None = None,
+        plastic_tensor: Array | None = None,
+    ) -> dict[str, Array]:
+        toughness = self.pfc.degraded_toughness(psi, plastic_eq, grain_mask=grain_mask)
+        strain_eff = strain if plastic_tensor is None else strain - plastic_tensor
+        elastic = self.elastic_energy(strain_eff, crack, stiffness)
+        pfc_e = self.pfc_energy(psi)
+        crack_e = self.crack_energy(crack, toughness)
+        total = elastic + pfc_e + crack_e
+        return {
+            "elastic": np.nan_to_num(elastic),
+            "pfc": np.nan_to_num(pfc_e),
+            "crack": np.nan_to_num(crack_e),
+            "total": np.nan_to_num(total),
+            "toughness": np.nan_to_num(toughness),
+        }
+
     def total_energy(
         self,
         strain: Array,

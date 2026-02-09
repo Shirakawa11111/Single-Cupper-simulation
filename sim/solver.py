@@ -10,7 +10,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 from scipy.sparse.linalg import LinearOperator, cg
 
-from .energy import Array, FreeEnergy, PFCCoupling
+from .energy import Array, FreeEnergy, PFCCoupling, crack_driving_force
 from .dislocation import gnd_from_slip
 from .mechanics import MechanicalEquilibriumSolver, MechanicalConfig
 from .pfc import PFCEvolver
@@ -43,6 +43,13 @@ class SolverConfig:
     gnd_burgers: float = 1.0
     # Fail fast when non-finite values appear
     fail_on_nonfinite: bool = True
+    # Optional history localization trigger based on crack level.
+    # <=0 disables this feature.
+    history_localization_crack_threshold: float = 0.0
+    # Multiplier applied to history update when crack >= threshold.
+    history_localization_boost: float = 1.0
+    # Multiplier applied to history update outside the localized region.
+    history_background_scale: float = 1.0
     mechanical: MechanicalConfig = field(default_factory=MechanicalConfig)
 
 
@@ -100,6 +107,7 @@ class AlternatingSolver:
         plastic_inst = np.zeros_like(psi)  # instantaneous equivalent plastic proxy
         plastic_vec = np.zeros(psi.shape + (3,))  # current directional surrogate (bounded 0-1)
         displacement = np.zeros(psi.shape + (3,))
+        strain = np.zeros(psi.shape + (3, 3))
         history = np.zeros_like(psi)
         stress = np.zeros(psi.shape + (3, 3))
         stress_vm = np.zeros_like(psi)
@@ -125,10 +133,48 @@ class AlternatingSolver:
             "tau_c": tau_c,
             "gnd_density": gnd_density,
             "displacement": displacement,
+            "strain": strain,
             "history": history,
             "stress": stress,
             "stress_vm": stress_vm,
         }
+
+    def compute_energy_fields(self) -> Dict[str, Array]:
+        if not self.state:
+            raise RuntimeError("initialize_state must be called.")
+        strain = self.state.get("strain")
+        if strain is None:
+            raise RuntimeError("strain field not found in solver state.")
+        crack = self.state["crack"]
+        psi = self.state["psi"]
+        accum_plastic = self.state.get("accum_plastic", self.state["plastic"])
+        plastic_tensor = self.state.get("plastic_tensor")
+        comps = self.energy.energy_density_components(
+            strain,
+            crack,
+            psi,
+            self.mechanical.stiffness,
+            plastic_eq=accum_plastic,
+            grain_mask=self.grain_mask,
+            plastic_tensor=plastic_tensor,
+        )
+        drive = crack_driving_force(
+            crack,
+            comps["toughness"],
+            self.energy.fracture.l0,
+            spacing=self.mechanical.spacing,
+            periodic=self.mechanical.grid.periodic,
+        )
+        fields = {
+            "energy_elastic": comps["elastic"],
+            "energy_pfc": comps["pfc"],
+            "energy_crack": comps["crack"],
+            "energy_total_density": comps["total"],
+            "toughness": comps["toughness"],
+            "crack_driving_force": np.nan_to_num(drive),
+        }
+        self.state.update(fields)
+        return fields
 
     def step(self, macro_strain: Tuple[float, float, float]) -> float:
         if not self.state:
@@ -217,7 +263,16 @@ class AlternatingSolver:
         # 方向性权重：加载轴上的塑性分量提高历史能量权重
         load_comp = np.clip(plastic_vec[..., self.config.load_axis], 0.0, None)
         anisotropic_boost = 1.0 + self.config.dir_coupling * load_comp
-        history = np.maximum(history, pos_energy * anisotropic_boost)
+        history_candidate = pos_energy * anisotropic_boost
+        loc_thr = float(self.config.history_localization_crack_threshold)
+        if loc_thr > 0.0:
+            loc_boost = max(float(self.config.history_localization_boost), 0.0)
+            bg_scale = max(float(self.config.history_background_scale), 0.0)
+            if (loc_boost != 1.0) or (bg_scale != 1.0):
+                loc_mask = crack >= loc_thr
+                loc_weight = np.where(loc_mask, loc_boost, bg_scale)
+                history_candidate = history_candidate * loc_weight
+        history = np.maximum(history, history_candidate)
 
         # 4. AT2 裂纹求解（SPD 线性方程，带可选粘性与欠松弛）
         l0 = self.energy.fracture.l0
@@ -305,6 +360,7 @@ class AlternatingSolver:
                 "tau_c": tau_c,
                 "gnd_density": gnd_density,
                 "displacement": displacement,
+                "strain": strain,
                 "history": history,
                 "stress": stress,
                 "stress_vm": stress_vm,

@@ -1,0 +1,47 @@
+description: "D2 crack-localization + energy-density regression baseline."
+
+virtual_cycle:
+  task: d2_localization_energy
+  auto_output: true
+  export_energy_fields: true
+
+  cycles: 6
+  cycle_points: 40
+  max_strain: 0.010
+  failure_threshold: 0.999
+
+  orientation_vector: [1.0, 1.0, 1.0]
+  grid_shape: [32, 16, 8]
+  grid_spacing: [1.0, 1.0, 1.0]
+  grid_periodic: [true, true, false]
+
+  pfc_active: false
+  gnd_active: true
+  stress_mu_weight: 0.0
+
+  notch_box:
+    - [11.2, 14.4]
+    - [7.2, 8.8]
+    - [2.8, 5.2]
+  notch_crack_value: 0.90
+  localization_trigger_threshold: 0.75
+  localization_trigger_boost: 8.0
+  localization_background_scale: 0.005
+  crack_length_threshold: 0.80
+  toughness_scale: 2.0
+  crack_relax: 0.04
+  crack_tol: 0.005
+  crack_max_iters: 1200
+
+  mech_max_iters: 80
+  mech_outer_max_iters: 2
+  mech_tol: 5.0e-5
+  mech_outer_tol: 5.0e-6
+  mech_regularization: 2.0
+  mech_accept_rel_residual: 1.0e-2
+  mech_accept_incomplete_cg: true
+  mech_enable_gmres_fallback: false
+  mech_solution_abs_limit: 10.0
+  mech_clip_solution_on_limit: true
+  mech_unilateral_mode: volumetric
+  mech_preconditioner: jacobi

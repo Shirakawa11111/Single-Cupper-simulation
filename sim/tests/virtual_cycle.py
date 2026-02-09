@@ -62,6 +62,13 @@ class CycleResult:
     plastic_range: float = 0.0
     rss_peak_nd: float = 0.0
     rss_peak_nd_signed: float = 0.0
+    crack_p95: float = 0.0
+    crack_p99: float = 0.0
+    crack_localization_index: float = 0.0
+    energy_elastic_mean: float = 0.0
+    energy_pfc_mean: float = 0.0
+    energy_crack_mean: float = 0.0
+    energy_total_density_mean: float = 0.0
 
 
 def run_virtual_cycles(
@@ -84,6 +91,9 @@ def run_virtual_cycles(
     notch_crack_value: float = 0.6,     # notch 区域内的初始裂纹值
     stress_mu_weight: float = 0.5,      # von Mises 应力归一化后乘此系数作为 μ_extra，<=0 则关闭
     crack_relax: float = 0.05,          # 裂纹松弛系数（默认较高便于萌生）
+    localization_trigger_threshold: float = 0.0,  # 局部化触发：crack>=阈值进入高驱动区（<=0 关闭）
+    localization_trigger_boost: float = 1.0,      # 局部化区 history 放大系数
+    localization_background_scale: float = 1.0,   # 非局部化区 history 缩放系数
     crack_tol: float | None = None,     # 裂纹 CG 收敛阈值
     crack_max_iters: int | None = None, # 裂纹 CG 最大迭代
     crack_accept_rel_residual: float | None = None, # 裂纹 CG 相对残差验收阈值
@@ -136,6 +146,7 @@ def run_virtual_cycles(
     run_dir: Path | None = None,            # 输出根目录（默认按日期/任务自动生成）
     task: str = "virtual_cycle",            # 任务标签（用于命名输出目录）
     auto_output: bool = False,              # 若 True 且 run_dir 提供/默认，则自动填充输出文件
+    export_energy_fields: bool = False,     # 若 True，输出能量密度/裂纹驱动力场到 VTK 并记录周期统计
     pfc_active: bool = True,                # 是否演化 PFC
     gnd_active: bool = False,               # 是否输出 GND 诊断
     gnd_burgers: float = 1.0,               # Burgers 向量尺度（无量纲）
@@ -299,6 +310,9 @@ def run_virtual_cycles(
         solver_cfg = SolverConfig(
             dt=5e-3,
             crack_relax=crack_relax,
+            history_localization_crack_threshold=localization_trigger_threshold,
+            history_localization_boost=localization_trigger_boost,
+            history_background_scale=localization_background_scale,
             crack_tol=crack_tol if crack_tol is not None else 1e-6,
             crack_max_iters=crack_max_iters if crack_max_iters is not None else 400,
             crack_accept_rel_residual=(
@@ -349,6 +363,9 @@ def run_virtual_cycles(
     solver_cfg = SolverConfig(
         dt=5e-3,
         crack_relax=crack_relax,
+        history_localization_crack_threshold=localization_trigger_threshold,
+        history_localization_boost=localization_trigger_boost,
+        history_background_scale=localization_background_scale,
         crack_tol=crack_tol if crack_tol is not None else 1e-6,
         crack_max_iters=crack_max_iters if crack_max_iters is not None else 400,
         crack_accept_rel_residual=(
@@ -512,6 +529,8 @@ def run_virtual_cycles(
                     print(f"  Cycle {cycle} Substep {step}/{segment_steps} | Strain {current_strain:.4f}")
                     if vtk_dir:
                         vtk_dir.mkdir(parents=True, exist_ok=True)
+                        if export_energy_fields:
+                            solver.compute_energy_fields()
                         vtk_fields = {
                             "crack": solver.state["crack"],
                             "plastic": solver.state["plastic"],
@@ -527,6 +546,18 @@ def run_virtual_cycles(
                         tau_c = solver.state.get("tau_c")
                         if tau_c is not None:
                             vtk_fields["tau_c"] = tau_c
+                        for key in (
+                            "history",
+                            "energy_elastic",
+                            "energy_pfc",
+                            "energy_crack",
+                            "energy_total_density",
+                            "crack_driving_force",
+                            "toughness",
+                        ):
+                            value = solver.state.get(key)
+                            if value is not None:
+                                vtk_fields[key] = value
                         write_vtk(
                             vtk_dir / f"anim_frame_{frame_id:05d}.vtk",
                             grid,
@@ -537,6 +568,30 @@ def run_virtual_cycles(
 
         crack_mean = solver.state["crack"].mean()
         accum_plastic_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
+        crack_p95 = float(np.percentile(solver.state["crack"], 95.0))
+        crack_p99 = float(np.percentile(solver.state["crack"], 99.0))
+        crack_localization_index = float(crack_p99 / (crack_mean + 1e-12))
+        energy_fields = solver.compute_energy_fields() if export_energy_fields else {}
+        energy_elastic_mean = (
+            float(np.mean(energy_fields.get("energy_elastic", 0.0)))
+            if export_energy_fields
+            else 0.0
+        )
+        energy_pfc_mean = (
+            float(np.mean(energy_fields.get("energy_pfc", 0.0)))
+            if export_energy_fields
+            else 0.0
+        )
+        energy_crack_mean = (
+            float(np.mean(energy_fields.get("energy_crack", 0.0)))
+            if export_energy_fields
+            else 0.0
+        )
+        energy_total_density_mean = (
+            float(np.mean(energy_fields.get("energy_total_density", 0.0)))
+            if export_energy_fields
+            else 0.0
+        )
         gnd = solver.state.get("gnd_density")
         gnd_mean = float(np.mean(gnd)) if gnd is not None else 0.0
         gnd_max = float(np.max(gnd)) if gnd is not None else 0.0
@@ -560,6 +615,13 @@ def run_virtual_cycles(
                 plastic_range=plastic_range,
                 rss_peak_nd=cycle_rss_peak,
                 rss_peak_nd_signed=cycle_rss_peak_signed,
+                crack_p95=crack_p95,
+                crack_p99=crack_p99,
+                crack_localization_index=crack_localization_index,
+                energy_elastic_mean=energy_elastic_mean,
+                energy_pfc_mean=energy_pfc_mean,
+                energy_crack_mean=energy_crack_mean,
+                energy_total_density_mean=energy_total_density_mean,
             )
         )
 
@@ -624,13 +686,18 @@ def run_virtual_cycles(
             with csv_output.open("w", encoding="utf-8") as fh:
                 fh.write(
                     "cycle,energy,crack_mean,accum_plastic_mean,gnd_mean,gnd_max,"
-                    "crack_length,crack_delta,plastic_range\n"
+                    "crack_length,crack_delta,plastic_range,crack_p95,crack_p99,"
+                    "crack_localization_index,energy_elastic_mean,energy_pfc_mean,"
+                    "energy_crack_mean,energy_total_density_mean\n"
                 )
                 for r, pd, pr in zip(results, crack_deltas, plastic_ranges):
                     fh.write(
                         f"{r.cycle},{r.load:.6e},{r.crack_mean:.6e},"
                         f"{r.accum_plastic_mean:.6e},{r.gnd_mean:.6e},{r.gnd_max:.6e},"
-                        f"{r.crack_length:.6e},{pd:.6e},{pr:.6e}\n"
+                        f"{r.crack_length:.6e},{pd:.6e},{pr:.6e},"
+                        f"{r.crack_p95:.6e},{r.crack_p99:.6e},{r.crack_localization_index:.6e},"
+                        f"{r.energy_elastic_mean:.6e},{r.energy_pfc_mean:.6e},"
+                        f"{r.energy_crack_mean:.6e},{r.energy_total_density_mean:.6e}\n"
                     )
         if analysis_csv:
             analysis_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -643,9 +710,15 @@ def run_virtual_cycles(
                 da = np.zeros_like(a_arr)
             eps_p_half = 0.5 * np.array([r.plastic_range for r in results], dtype=float)
             rss_peak = np.array([r.rss_peak_nd for r in results], dtype=float)
+            crack_loc_idx = np.array([r.crack_localization_index for r in results], dtype=float)
+            energy_crack_mean = np.array([r.energy_crack_mean for r in results], dtype=float)
+            energy_total_mean = np.array([r.energy_total_density_mean for r in results], dtype=float)
             with analysis_csv.open("w", encoding="utf-8") as fh:
-                fh.write("cycle,a,da_dN,eps_p_half,rss_peak_nd,gnd_mean,gnd_max\n")
-                for c, a, dadn, eph, rp, gm, gx in zip(
+                fh.write(
+                    "cycle,a,da_dN,eps_p_half,rss_peak_nd,gnd_mean,gnd_max,"
+                    "crack_localization_index,energy_crack_mean,energy_total_density_mean\n"
+                )
+                for c, a, dadn, eph, rp, gm, gx, cli, ecm, etm in zip(
                     cycles_out,
                     a_arr,
                     da,
@@ -653,8 +726,14 @@ def run_virtual_cycles(
                     rss_peak,
                     [r.gnd_mean for r in results],
                     [r.gnd_max for r in results],
+                    crack_loc_idx,
+                    energy_crack_mean,
+                    energy_total_mean,
                 ):
-                    fh.write(f"{int(c)},{a:.6e},{dadn:.6e},{eph:.6e},{rp:.6e},{gm:.6e},{gx:.6e}\n")
+                    fh.write(
+                        f"{int(c)},{a:.6e},{dadn:.6e},{eph:.6e},{rp:.6e},{gm:.6e},{gx:.6e},"
+                        f"{cli:.6e},{ecm:.6e},{etm:.6e}\n"
+                    )
         if stress_strain_csv and stress_strain_log:
             stress_strain_csv.parent.mkdir(parents=True, exist_ok=True)
             with stress_strain_csv.open("w", encoding="utf-8") as fh:
