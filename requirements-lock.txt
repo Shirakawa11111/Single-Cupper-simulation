@@ -1,0 +1,6 @@
+# Locked runtime dependencies (Week-9 reproducibility baseline, 2026-02-08)
+# Generated from a validated local environment for this repository.
+numpy==1.26.4
+scipy==1.13.1
+matplotlib==3.9.2
+PyYAML==6.0.1

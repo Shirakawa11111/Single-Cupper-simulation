@@ -25,3 +25,18 @@ sim/tests/amp_runs_parallel/
 *.lammpstrj
 *.data
 sim/sim/
+
+# Local experiment/raw inputs (keep local, do not commit by default)
+20240917_-111_Cu_1e-3_4000_294K_001/
+CHC.txt
+
+# Local scratch / ad-hoc outputs
+sim/tests/tmp/
+sim/tests/virtual_cycle*.csv
+sim/tests/virtual_cycle*.png
+sim/tests/*_stress_strain.csv
+sim/tests/*.stdout
+sim/tests/*.stderr
+
+# Local notes / figures
+其他论文单晶铜循环响应.jpg

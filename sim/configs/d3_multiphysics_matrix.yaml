@@ -1,0 +1,92 @@
+description: "D3 multi-physics matrix gate (positive / strong-positive / negative-control)."
+
+defaults:
+  base_config: sim/configs/d2_localization_energy.yaml
+  runner_script: sim/tests/regress_d2_localization_energy.py
+
+  # Keep runner gate permissive on onset metrics; D3 case-level expectations decide pass/fail.
+  # Stability / finite checks stay strict.
+  runner_args:
+    min_cycles: 3
+    min_crack_delta: 0.0
+    min_localization_index: 0.0
+    min_energy_crack_mean: 0.0
+    min_energy_total_density_mean: 0.0
+    max_runtime_warnings: 50
+    max_mechanical_not_accepted_steps: 160
+    max_crack_cg_nonconverged_steps: 40
+    max_nonfinite_count: 0
+    min_vtk_energy_fields: 4
+
+  # Shared virtual-cycle overrides for matrix runtime budget.
+  virtual_cycle_overrides:
+    task: d3_multiphysics_matrix
+    cycles: 4
+    cycle_points: 32
+
+  expectations:
+    positive:
+      min_crack_delta: 0.05
+      min_localization_index: 3.0
+      min_energy_crack_mean: 1.0e-10
+      min_energy_total_density_mean: 1.0e-10
+      min_vtk_energy_fields: 4
+    negative:
+      max_crack_delta: 0.05
+      max_crack_mean_final: 0.08
+      max_energy_total_density_mean: 0.20
+
+  require_all: true
+  min_pass_count: 3
+
+cases:
+  - name: notch_positive
+    mode: positive
+    enabled: true
+    virtual_cycle_overrides:
+      max_strain: 0.010
+      notch_crack_value: 0.90
+      toughness_scale: 2.0
+      localization_trigger_threshold: 0.75
+      localization_trigger_boost: 8.0
+      localization_background_scale: 0.005
+      crack_length_threshold: 0.80
+      crack_relax: 0.04
+      crack_tol: 0.005
+
+  - name: notch_strong_positive
+    mode: positive
+    enabled: true
+    virtual_cycle_overrides:
+      max_strain: 0.012
+      notch_crack_value: 0.95
+      toughness_scale: 1.6
+      localization_trigger_threshold: 0.70
+      localization_trigger_boost: 10.0
+      localization_background_scale: 0.003
+      crack_length_threshold: 0.90
+      crack_relax: 0.05
+      crack_tol: 0.005
+    expected:
+      min_crack_delta: 0.0
+      min_crack_mean_final: 0.08
+      min_localization_index: 3.2
+
+  - name: no_notch_negative
+    mode: negative
+    enabled: true
+    virtual_cycle_overrides:
+      max_strain: 0.004
+      notch_box: null
+      notch_crack_value: 0.0
+      toughness_scale: 3.0
+      localization_trigger_threshold: 0.90
+      localization_trigger_boost: 2.0
+      localization_background_scale: 0.05
+      crack_length_threshold: 0.80
+      crack_relax: 0.02
+      crack_tol: 0.005
+    expected:
+      max_crack_delta: 0.02
+      max_crack_mean_final: 0.06
+      max_energy_total_density_mean: 0.12

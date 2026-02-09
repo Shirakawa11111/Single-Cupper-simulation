@@ -22,3 +22,4 @@
 - 新增：`sim/tests/regress_exp_alignment_multi.py` + `sim/configs/exp_alignment_multi_skeleton.yaml`，单工况 smoke 已通过。
 - ⭕ 8) 输出 `release pack v2`（配置锁参 + 全门禁命令 + 自动报告模板 + handoff）。
 - 产物：`sim/configs/release_pack_v2_lock.yaml`、`sim/tests/release_pack_v2_commands.sh`、`sim/tests/release_pack_v2_report_template.md`、`sim/tests/build_release_pack_v2_report.py`、`HANDOFF_RELEASE_PACK_V2.md`。
+- 执行结果：`phase2_full` 通过、`exp_alignment_multi` 通过，seed 复用已验证 `6/6` 结果并生成最终报告 `sim/tests/regress_runs/2026-02-08/release_pack_v2/release_pack_v2_report.md`。

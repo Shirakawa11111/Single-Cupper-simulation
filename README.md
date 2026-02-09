@@ -423,3 +423,88 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
   - `crack_cg_nonconverged_steps=7/6/7`
 - Phase-2 对齐回归（fail=0.999）：
   `sim/tests/regress_runs/2026-02-07/phase2_gate_reg2_len0995_fail0999_cg20/summary.json`（`passed=true`）。
+
+### 验证记录（2026-02-08，Week-8 多工况 + 能量门禁 + CI）
+- 多工况对齐 smoke（5 工况）：
+  `sim/tests/regress_runs/2026-02-08/exp_alignment_multi_week8_smoke/summary.json`（`passed=true`，`passed_count=5/5`）。
+  条件明细见 `sim/tests/regress_runs/2026-02-08/exp_alignment_multi_week8_smoke/conditions/*.summary.json`，
+  汇总均值：`avg_rmse_tau≈27.776 MPa`、`avg_mae_tau≈22.723 MPa`、`avg_rmse_gamma≈0.003808`。
+- 能量一致性门禁 smoke：
+  `sim/tests/regress_runs/2026-02-08/energy_gate_smoke/summary.json`（`passed=true`）；
+  `n_cycles=5`、`energy_drop_count=0`、`crack_reversal_count=0`、`plastic_reversal_count=0`。
+- Phase-2 + exp + energy 一体 smoke：
+  `sim/tests/regress_runs/2026-02-08/phase2_with_energy_gate_smoke/summary.json`（`passed=true`）。
+- CI smoke（本地复核）：
+  `sim/tests/regress_runs/2026-02-08/ci_smoke_local_verify_fix/summary.json`（`passed=true`，`phase2_quick/multi_align_smoke/seed_ci_smoke` 全通过）。
+- Week-4 release（含 seed 批次）：
+  `sim/tests/regress_runs/2026-02-08/release_baseline_week4_fullskip_with_seeds/bundle_summary.json`（`passed=true`，`phase2_gate + seed_batch_1 + seed_batch_2` 全通过）。
+
+### 验证记录（2026-02-09，D1 全量门禁）
+- D1 full gate（非 quick、全 case、seed full-mode）：
+  `sim/tests/regress_runs/2026-02-09/d1_full_gate/summary.json`（`passed=true`，`failure_reasons=[]`）。
+- 验收矩阵：
+  - `acceptance.phase2_full.passed=true`
+  - `acceptance.multi_align_full.passed=true`（`condition_total=5`，`passed_count=5`）
+  - `acceptance.seed_robustness.passed=true`（`seed_gate_pass_count=6/6`）
+
+### 验证记录（2026-02-09，D2 裂纹局部化触发 + 能量密度输出）
+- D2 门禁：
+  `sim/tests/regress_runs/2026-02-09/d2_localization_energy/summary.json`（`passed=true`）。
+- 核心指标：
+  - `cycles_completed=6`
+  - `crack_delta_total=2.396875`（阈值 `>=0.05`）
+  - `crack_localization_index_peak=5.1072`（阈值 `>=3.0`）
+  - `energy_crack_mean_final=0.1322`
+  - `energy_total_density_mean_final=1.2391`
+  - `vtk_energy_field_count=6`（`energy_elastic/energy_pfc/energy_crack/energy_total_density/crack_driving_force/toughness`）
+
+### 验证记录（2026-02-09，D3 多物理耦合矩阵）
+- D3 矩阵 smoke：
+  `sim/tests/regress_runs/2026-02-09/d3_multiphysics_matrix_smoke/summary.json`（`passed=true`，`case_total=3`，`passed_count=3`）。
+- 矩阵覆盖：
+  - 正向 case：`notch_positive`（高裂纹增量 + 局部化）
+  - 正向强裂纹 case：`notch_strong_positive`（高局部化 + `crack_mean_final` 下限）
+  - 负对照：`no_notch_negative`（抑制误触发，`crack_mean_final` 与能量密度保持低值）
+
+### 验证记录（2026-02-09，release_d2_d3_quick_seedfull 完整包）
+- 汇总：
+  `sim/tests/regress_runs/2026-02-09/release_d2_d3_quick_seedfull/bundle_summary.json`（`passed=true`）。
+- 通过矩阵：
+  - `acceptance.d2_localization.passed=true`
+  - `acceptance.d3_matrix.passed=true`（`case_total=3`，`passed_count=3`）
+  - `seed_batch_1`: `all_seed_gate_passed=true`（`3/3`）
+  - `seed_batch_2`: `all_seed_gate_passed=true`（`3/3`）
+- 同日快速基线（不含 seed）：
+  `sim/tests/regress_runs/2026-02-09/release_d2_d3_quick_baseline/bundle_summary.json`（`passed=true`）。
+
+## 基准测试全景矩阵（截至 2026-02-09）
+
+| 基准脚本/入口 | 验证目标 | 最新通过产物 | 核心结果 |
+|---|---|---|---|
+| `sim/tests/regress_microstrain.py` | 线弹性微应变比值 + 低塑性漂移 | `sim/tests/regress_runs/2026-02-05/microstrain/summary.json` | `passed=true`，`stress_ratio≈2.0` |
+| `sim/tests/regress_gnd.py` | GND 线性响应（双梯度比值） | `sim/tests/regress_runs/2026-02-05/gnd/summary.json` | `passed=true`，`ratio_double≈2.0` |
+| `sim/tests/regress_gnd_cycle.py` | 低幅循环 GND/塑性累积趋势 | `sim/tests/regress_runs/2026-02-05/gnd_cycle/summary.json` | `passed=true`，`gnd_growth>0`，`accum_growth>0` |
+| `sim/tests/regress_bc_crack.py` | 边界处理 + Mode-I 裂纹增量（小规模） | `sim/tests/regress_runs/2026-02-05/bc_crack/summary.json` | `passed=true`，压缩不误增裂 |
+| `sim/tests/regress_bc_crack_large.py` | 大网格边界/裂纹门禁 | `sim/tests/regress_runs/2026-02-05/bc_crack_large/summary.json` | `passed=true`，`modeI_phi_mean_delta>0` |
+| `sim/tests/regress_bc_crack_micron.py` | 微米尺度缩放一致性 | `sim/tests/regress_runs/2026-02-05/bc_crack_micron/summary.json` | `passed=true`，阈值全满足 |
+| `sim/tests/regress_all.py` | 边界裂纹三件套统一入口 | `sim/tests/regress_runs/2026-02-06/phase1_baseline/boundary_crack/summary.json` | `passed=true`，`small/large/micron` 全通过 |
+| `sim/tests/run_phase1_suite.py` | Phase-1 一键全回归 | `sim/tests/regress_runs/2026-02-06/phase1_suite_venvcheck/summary.json` | `passed=true`，fresh venv 可复现 |
+| `sim/tests/regress_phase2.py` | Phase-2 门禁编排（onset + 对齐 + 可扩展 gate） | `sim/tests/regress_runs/2026-02-09/release_d2_d3_quick_seedfull/phase2_gate/summary.json` | `passed=true`，`with_exp_alignment=true`，`with_d2_localization=true` |
+| `sim/tests/regress_exp_alignment.py` | 单工况实验对齐阈值门禁 | `sim/tests/regress_runs/2026-02-09/release_d2_d3_quick_seedfull/phase2_gate/exp_alignment/summary.json` | `passed=true`，`rmse_tau≈28.45 MPa`，`rmse_gamma≈0.003889` |
+| `sim/tests/regress_energy_consistency.py` | 周期能量/裂纹/塑性单调性门禁 | `sim/tests/regress_runs/2026-02-08/energy_gate_smoke/summary.json` | `passed=true`，`energy_drop_count=0`，`reversal_count=0` |
+| `sim/tests/regress_exp_alignment_multi.py` | 多工况实验对齐门禁 | `sim/tests/regress_runs/2026-02-08/exp_alignment_multi_week8_smoke/summary.json` | `passed=true`，`5/5` 条件通过 |
+| `sim/tests/repeat_crack_onset_seeds.py` | seed 稳健性批次门禁 | `sim/tests/regress_runs/2026-02-09/d1_full_gate/seed_batch_1/summary.json` | `passed=true`，`seed_gate_pass_count=3/3`（batch_2 同样通过） |
+| `sim/tests/regress_d2_localization_energy.py` | D2：裂纹局部化 + 能量密度场完整性 | `sim/tests/regress_runs/2026-02-09/d2_localization_energy/summary.json` | `passed=true`，`localization_index_peak=5.1072` |
+| `sim/tests/regress_d3_multiphysics_matrix.py` | D3：正向/负向矩阵门禁 | `sim/tests/regress_runs/2026-02-09/d3_multiphysics_matrix_smoke/summary.json` | `passed=true`，`passed_count=3/3` |
+| `sim/tests/run_d1_full_gate.py` | D1：phase2_full + multi_align_full + seed_full 编排 | `sim/tests/regress_runs/2026-02-09/d1_full_gate/summary.json` | `passed=true`，验收矩阵全绿 |
+| `sim/tests/run_release_baseline_week4.py` | release bundle 编排（Phase-2 + D2 + D3 + seed） | `sim/tests/regress_runs/2026-02-09/release_d2_d3_quick_seedfull/bundle_summary.json` | `passed=true`，D2/D3/seed 批次全部通过 |
+| `sim/tests/run_ci_smoke.py` | CI 最小链路（phase2/multi_align/seed_ci） | `sim/tests/regress_runs/2026-02-08/ci_smoke_local_verify_fix/summary.json` | `passed=true`，三子任务全通过 |
+| `sim/tests/run_seed_robustness_20.py` | 20-seed 分批模板执行 | `sim/tests/regress_runs/2026-02-08/seed_robustness_20_smoke_pair/bundle_summary.json` | `passed=true`（smoke 模式） |
+| `sim/tests/summarize_seed_robustness_ci.py` | seed 批次统计 + Wilson CI 聚合 | `sim/tests/regress_runs/2026-02-08/seed_ci_summary_smoke/summary.json` | `all_seed_gate_passed=true`，`seed_unique_count=6` |
+
+## 尚需完善（下一阶段）
+- 将 D2/D3 从 quick profile 扩展到 full profile 常态门禁（保留 `release_d2_d3_quick_seedfull` 作为快速基线）。
+- 完成 20-seed full-case 批次闭环（包含 CI 汇总 JSON/MD + 固化接受阈值）。
+- 对 D3 负对照集合增加“中等驱动/不同晶向”子集，进一步验证“不过触发”稳健性。
+- 增加长周期（>10 cycles）能量密度与裂纹局部化联合回归，补齐“时间尺度外推”证据链。
+- 将 release 产物摘要自动写入统一 markdown（当前已有 `bundle_summary.json`，建议补标准化周报模板落盘）。

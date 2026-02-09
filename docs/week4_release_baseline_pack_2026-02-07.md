@@ -2,7 +2,8 @@
 
 ## Scope
 - Freeze a reproducible release bundle for the current Week-4 lock:
-  - phase2 + crack-onset + exp-alignment gate
+  - phase2 + crack-onset + exp-alignment gate（当前已默认集成 D2 局部化门禁）
+  - D3 multiphysics matrix gate（默认开启）
   - seed robustness checks
   - report template for handoff/publication notes
 
@@ -13,6 +14,7 @@
 
 ## Bundle Runner
 - Script: `sim/tests/run_release_baseline_week4.py`
+- D3 matrix gate 默认开启；如需跳过可加 `--skip-d3-matrix`
 
 ### Quick profile (CI/dev smoke)
 ```bash
@@ -41,6 +43,8 @@ python sim/tests/run_release_baseline_week4.py \
 - Bundle summary: `<out-root>/bundle_summary.json`
 - Task logs: `<out-root>/logs/*.stdout`, `<out-root>/logs/*.stderr`
 - Phase2 summary: `<out-root>/phase2_gate/summary.json`
+- D2 summary（默认开启）: `<out-root>/phase2_gate/d2_localization/summary.json`
+- D3 summary（默认开启）: `<out-root>/d3_multiphysics_matrix/summary.json`
 - Seed batches (if enabled): `<out-root>/seed_batch_*/summary.json`
 
 ## Report Template

@@ -59,6 +59,11 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--python", type=str, default=sys.executable)
     parser.add_argument("--only", type=str, default="", help="Optional comma-separated condition names to run.")
+    parser.add_argument(
+        "--reuse-first-sim-csv",
+        action="store_true",
+        help="Reuse the first successful condition's sim_csv for following conditions when sim_csv is not set.",
+    )
     args = parser.parse_args()
 
     raw = yaml.safe_load(args.config.read_text(encoding="utf-8"))
@@ -74,6 +79,7 @@ def main() -> int:
     if not isinstance(limits_default, dict):
         limits_default = {}
     min_pass_count = _int(defaults.get("min_pass_count", 1), 1)
+    reuse_first_sim_csv = bool(defaults.get("reuse_first_sim_csv", False) or args.reuse_first_sim_csv)
 
     rows = raw.get("conditions", [])
     if not isinstance(rows, list):
@@ -96,6 +102,7 @@ def main() -> int:
         "mae_gamma_avg": 0.0,
     }
     metrics_count = 0
+    first_sim_csv: str | None = None
 
     for item in rows:
         if not isinstance(item, dict):
@@ -139,6 +146,12 @@ def main() -> int:
             str(_int(limits.get("max_nonfinite_count"), 0)),
         ]
 
+        # Per-condition explicit sim csv has highest priority.
+        if "sim_csv" in item and item["sim_csv"] is not None:
+            cmd.extend(["--sim-csv", _str(item["sim_csv"])])
+        elif reuse_first_sim_csv and first_sim_csv:
+            cmd.extend(["--sim-csv", first_sim_csv])
+
         # Condition-specific overrides for experiment/schmid mapping.
         optional_map = {
             "exp_folder": "--exp-folder",
@@ -171,12 +184,22 @@ def main() -> int:
 
         summary = _read_json(cond_out)
         passed = bool(proc.returncode == 0 and isinstance(summary, dict) and summary.get("passed", False))
+
+        used_sim_csv = None
+        if isinstance(summary, dict):
+            run = summary.get("run")
+            if isinstance(run, dict) and isinstance(run.get("sim_csv"), str):
+                used_sim_csv = run.get("sim_csv")
+                if first_sim_csv is None:
+                    first_sim_csv = used_sim_csv
+
         rec = {
             "name": name,
             "command": cmd,
             "returncode": int(proc.returncode),
             "duration_s": dt,
             "passed": passed,
+            "used_sim_csv": used_sim_csv,
             "summary_json": str(cond_out),
             "stdout_log": str(stdout_path),
             "stderr_log": str(stderr_path),
@@ -209,6 +232,8 @@ def main() -> int:
         "finished_at": finished.isoformat(timespec="seconds"),
         "duration_s": (finished - started).total_seconds(),
         "min_pass_count": min_pass_count,
+        "reuse_first_sim_csv": reuse_first_sim_csv,
+        "first_sim_csv": first_sim_csv,
         "condition_total": total,
         "passed_count": passed_count,
         "failed_names": failed_names,

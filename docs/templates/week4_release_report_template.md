@@ -32,6 +32,14 @@
 | mae_tau_MPa |  |
 | rmse_gamma |  |
 
+## Units Mapping Snapshot (nd↔SI)
+- Reference: `sigma_ref = 168.4 GPa (=168400 MPa)`, `L0 = 1.0e-6 m`
+- Stress conversion: `tau_MPa = tau_nd * 168400`, `tau_nd = tau_MPa / 168400`
+- Fill-in:
+  - `rmse_tau_nd`:
+  - `mae_tau_nd`:
+- Worked example: `docs/week9_units_example_2026-02-08.md`
+
 ## Notes
 - Numerical stability notes:
 - Physical interpretation notes:

@@ -1,0 +1,41 @@
+defaults:
+  thresholds:
+    rmse_tau_max: 1.0e-6
+    mae_tau_max: 1.0e-6
+    rmse_gamma_max: 1.0e-10
+  limits:
+    max_runtime_warnings: 50
+    max_mechanical_not_accepted_steps: 160
+    max_crack_cg_nonconverged_steps: 40
+    max_nonfinite_count: 0
+  min_pass_count: 2
+  reuse_first_sim_csv: false
+
+conditions:
+  - name: ci_cycle_00000001
+    enabled: true
+    config: sim/configs/fatigue_lowamp_align_locked_v4.yaml
+    sim_csv: sim/tests/fixtures/exp_alignment_ci/sim_stress_strain.csv
+    exp_folder: sim/tests/fixtures/exp_alignment_ci
+    cycle: 1
+    axis: "-1,1,1"
+    stress_col: 1
+    strain_col: 0
+    exp_strain_scale: 1e-6
+    sim_stress_col: sig_xx_GPa
+    sim_strain_col: macro_strain
+    sim_stress_scale: 1000.0
+
+  - name: ci_cycle_00000002
+    enabled: true
+    config: sim/configs/fatigue_lowamp_align_locked_v4.yaml
+    sim_csv: sim/tests/fixtures/exp_alignment_ci/sim_stress_strain.csv
+    exp_folder: sim/tests/fixtures/exp_alignment_ci
+    cycle: 2
+    axis: "-1,1,1"
+    stress_col: 1
+    strain_col: 0
+    exp_strain_scale: 1e-6
+    sim_stress_col: sig_xx_GPa
+    sim_strain_col: macro_strain
+    sim_stress_scale: 1000.0

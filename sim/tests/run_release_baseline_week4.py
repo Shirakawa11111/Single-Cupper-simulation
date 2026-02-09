@@ -2,9 +2,10 @@
 Run Week-4 baseline release bundle.
 
 Bundle includes:
-1) phase2 + exp-alignment gate (quick/full profiles)
-2) optional seed-robustness batches
-3) consolidated bundle summary.json
+1) phase2 + exp-alignment gate (quick/full profiles, with D2 localization by default)
+2) D3 multi-physics matrix gate (enabled by default)
+3) optional seed-robustness batches
+4) consolidated bundle summary.json
 """
 
 from __future__ import annotations
@@ -71,6 +72,83 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _d2_acceptance(phase2_summary: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(phase2_summary, dict):
+        return {"enabled": False, "passed": False}
+    enabled = bool(phase2_summary.get("with_d2_localization", False))
+    tasks = phase2_summary.get("tasks")
+    if not isinstance(tasks, list):
+        return {"enabled": enabled, "passed": False}
+    d2_task = None
+    for row in tasks:
+        if isinstance(row, dict) and str(row.get("name")) == "d2_localization":
+            d2_task = row
+            break
+    if not isinstance(d2_task, dict):
+        return {"enabled": enabled, "passed": False}
+    out: dict[str, Any] = {
+        "enabled": enabled,
+        "passed": bool(d2_task.get("passed", False)),
+        "summary_json": d2_task.get("summary_json"),
+    }
+    summary_path = d2_task.get("summary_json")
+    if isinstance(summary_path, str) and summary_path.strip():
+        d2_summary = _read_json(Path(summary_path))
+        if isinstance(d2_summary, dict):
+            failures = d2_summary.get("failures")
+            if isinstance(failures, dict):
+                out["failures"] = failures
+            metrics = d2_summary.get("metrics")
+            if isinstance(metrics, dict):
+                for key in (
+                    "cycles_completed",
+                    "crack_delta_total",
+                    "crack_localization_index_peak",
+                    "energy_crack_mean_final",
+                    "energy_total_density_mean_final",
+                    "vtk_energy_field_count",
+                ):
+                    if key in metrics:
+                        out[key] = metrics.get(key)
+    return out
+
+
+def _d3_acceptance(d3_summary: dict[str, Any] | None, require_all: bool, min_pass_count: int) -> dict[str, Any]:
+    min_pass = max(1, int(min_pass_count))
+    if not isinstance(d3_summary, dict):
+        return {
+            "enabled": True,
+            "passed": False,
+            "require_all": bool(require_all),
+            "min_pass_count": min_pass,
+            "failure_reasons": ["summary_missing_or_invalid"],
+        }
+    case_total = int(d3_summary.get("case_total", 0))
+    passed_count = int(d3_summary.get("passed_count", 0))
+    failed_names_raw = d3_summary.get("failed_names")
+    failed_names = failed_names_raw if isinstance(failed_names_raw, list) else []
+    matrix_passed = bool(d3_summary.get("passed", False))
+
+    failures: list[str] = []
+    if not matrix_passed:
+        failures.append("runner_or_matrix_failed")
+    if passed_count < min_pass:
+        failures.append(f"passed_count({passed_count}<{min_pass})")
+    if require_all and not (case_total > 0 and passed_count == case_total):
+        failures.append(f"require_all_failed(passed_count={passed_count},case_total={case_total})")
+
+    return {
+        "enabled": True,
+        "passed": len(failures) == 0,
+        "require_all": bool(require_all),
+        "min_pass_count": min_pass,
+        "case_total": case_total,
+        "passed_count": passed_count,
+        "failed_names": failed_names,
+        "failure_reasons": failures,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run week4 release baseline bundle.")
     parser.add_argument("--python", type=str, default=sys.executable)
@@ -100,9 +178,35 @@ def main() -> int:
     parser.add_argument("--max-mechanical-not-accepted-steps", type=int, default=160)
     parser.add_argument("--max-crack-cg-nonconverged-steps", type=int, default=20)
     parser.add_argument("--max-nonfinite-count", type=int, default=0)
+    parser.add_argument("--skip-d2-localization", action="store_true")
+    parser.add_argument(
+        "--d2-localization-config",
+        type=Path,
+        default=Path("sim/configs/d2_localization_energy.yaml"),
+    )
+    parser.add_argument("--d2-min-cycles", type=int, default=3)
+    parser.add_argument("--d2-min-crack-delta", type=float, default=5.0e-2)
+    parser.add_argument("--d2-min-localization-index", type=float, default=3.0)
+    parser.add_argument("--d2-min-energy-crack-mean", type=float, default=1.0e-10)
+    parser.add_argument("--d2-min-energy-total-density-mean", type=float, default=1.0e-10)
+    parser.add_argument("--d2-max-runtime-warnings", type=int, default=None)
+    parser.add_argument("--d2-max-mechanical-not-accepted-steps", type=int, default=None)
+    parser.add_argument("--d2-max-crack-cg-nonconverged-steps", type=int, default=None)
+    parser.add_argument("--d2-max-nonfinite-count", type=int, default=None)
+    parser.add_argument("--d2-min-vtk-energy-fields", type=int, default=4)
+    parser.add_argument("--skip-d3-matrix", action="store_true")
+    parser.add_argument("--d3-matrix-config", type=Path, default=Path("sim/configs/d3_multiphysics_matrix.yaml"))
+    parser.add_argument("--d3-only", type=str, default="")
+    parser.add_argument("--d3-min-pass-count", type=int, default=3)
+    parser.add_argument("--d3-require-all", dest="d3_require_all", action="store_true")
+    parser.add_argument("--d3-allow-partial", dest="d3_require_all", action="store_false")
+    parser.set_defaults(d3_require_all=True)
     args = parser.parse_args()
 
     py = args.python
+    run_d2_localization = not bool(args.skip_d2_localization)
+    run_d3_matrix = not bool(args.skip_d3_matrix)
+    d3_min_pass_count = max(1, int(args.d3_min_pass_count))
     out_root = args.out_root or _default_out_root()
     out_root.mkdir(parents=True, exist_ok=True)
     logs = out_root / "logs"
@@ -125,6 +229,42 @@ def main() -> int:
         "--max-nonfinite-count",
         str(args.max_nonfinite_count),
     ]
+    if run_d2_localization:
+        phase2_cmd.extend(
+            [
+                "--with-d2-localization",
+                "--d2-localization-config",
+                str(args.d2_localization_config),
+                "--d2-min-cycles",
+                str(args.d2_min_cycles),
+                "--d2-min-crack-delta",
+                str(args.d2_min_crack_delta),
+                "--d2-min-localization-index",
+                str(args.d2_min_localization_index),
+                "--d2-min-energy-crack-mean",
+                str(args.d2_min_energy_crack_mean),
+                "--d2-min-energy-total-density-mean",
+                str(args.d2_min_energy_total_density_mean),
+                "--d2-max-runtime-warnings",
+                str(args.d2_max_runtime_warnings if args.d2_max_runtime_warnings is not None else args.max_runtime_warnings),
+                "--d2-max-mechanical-not-accepted-steps",
+                str(
+                    args.d2_max_mechanical_not_accepted_steps
+                    if args.d2_max_mechanical_not_accepted_steps is not None
+                    else args.max_mechanical_not_accepted_steps
+                ),
+                "--d2-max-crack-cg-nonconverged-steps",
+                str(
+                    args.d2_max_crack_cg_nonconverged_steps
+                    if args.d2_max_crack_cg_nonconverged_steps is not None
+                    else args.max_crack_cg_nonconverged_steps
+                ),
+                "--d2-max-nonfinite-count",
+                str(args.d2_max_nonfinite_count if args.d2_max_nonfinite_count is not None else args.max_nonfinite_count),
+                "--d2-min-vtk-energy-fields",
+                str(args.d2_min_vtk_energy_fields),
+            ]
+        )
     if args.profile == "quick":
         phase2_cmd.extend(
             [
@@ -168,6 +308,42 @@ def main() -> int:
     rec["summary"] = _read_json(phase2_out / "summary.json")
     rec["passed"] = bool(rec["passed"] and isinstance(rec["summary"], dict) and rec["summary"].get("passed", False))
     records.append(rec)
+    phase2_summary = rec["summary"] if isinstance(rec.get("summary"), dict) else None
+    d2_acceptance = _d2_acceptance(phase2_summary) if run_d2_localization else {"enabled": False, "passed": True}
+
+    if run_d3_matrix:
+        d3_out = out_root / "d3_multiphysics_matrix" / "summary.json"
+        d3_cmd = [
+            py,
+            "sim/tests/regress_d3_multiphysics_matrix.py",
+            "--config",
+            str(args.d3_matrix_config),
+            "--out",
+            str(d3_out),
+            "--min-pass-count",
+            str(d3_min_pass_count),
+            "--require-all" if args.d3_require_all else "--allow-partial",
+        ]
+        if args.d3_only.strip():
+            d3_cmd.extend(["--only", args.d3_only.strip()])
+        d3_rec = _run("d3_multiphysics_matrix", d3_cmd, logs)
+        d3_rec["summary_json"] = str(d3_out)
+        d3_rec["summary"] = _read_json(d3_out)
+        d3_acceptance = _d3_acceptance(
+            d3_summary=d3_rec["summary"] if isinstance(d3_rec["summary"], dict) else None,
+            require_all=bool(args.d3_require_all),
+            min_pass_count=d3_min_pass_count,
+        )
+        d3_rec["acceptance"] = d3_acceptance
+        d3_rec["passed"] = bool(d3_rec["passed"] and d3_acceptance.get("passed", False))
+        records.append(d3_rec)
+    else:
+        d3_acceptance = {
+            "enabled": False,
+            "passed": True,
+            "require_all": bool(args.d3_require_all),
+            "min_pass_count": d3_min_pass_count,
+        }
 
     if args.run_seed_robustness:
         batches = _parse_seed_batches(args.seed_batches)
@@ -215,9 +391,54 @@ def main() -> int:
         "finished_at": finished.isoformat(timespec="seconds"),
         "duration_s": (finished - started).total_seconds(),
         "profile": args.profile,
+        "run_d2_localization": run_d2_localization,
+        "run_d3_matrix": run_d3_matrix,
+        "d2_localization_config": str(args.d2_localization_config) if run_d2_localization else None,
+        "d3_matrix_config": str(args.d3_matrix_config) if run_d3_matrix else None,
+        "d2_thresholds": (
+            {
+                "min_cycles": args.d2_min_cycles,
+                "min_crack_delta": args.d2_min_crack_delta,
+                "min_localization_index": args.d2_min_localization_index,
+                "min_energy_crack_mean": args.d2_min_energy_crack_mean,
+                "min_energy_total_density_mean": args.d2_min_energy_total_density_mean,
+                "max_runtime_warnings": (
+                    args.d2_max_runtime_warnings if args.d2_max_runtime_warnings is not None else args.max_runtime_warnings
+                ),
+                "max_mechanical_not_accepted_steps": (
+                    args.d2_max_mechanical_not_accepted_steps
+                    if args.d2_max_mechanical_not_accepted_steps is not None
+                    else args.max_mechanical_not_accepted_steps
+                ),
+                "max_crack_cg_nonconverged_steps": (
+                    args.d2_max_crack_cg_nonconverged_steps
+                    if args.d2_max_crack_cg_nonconverged_steps is not None
+                    else args.max_crack_cg_nonconverged_steps
+                ),
+                "max_nonfinite_count": (
+                    args.d2_max_nonfinite_count if args.d2_max_nonfinite_count is not None else args.max_nonfinite_count
+                ),
+                "min_vtk_energy_fields": args.d2_min_vtk_energy_fields,
+            }
+            if run_d2_localization
+            else None
+        ),
+        "d3_thresholds": (
+            {
+                "require_all": bool(args.d3_require_all),
+                "min_pass_count": d3_min_pass_count,
+                "only": args.d3_only.strip() if args.d3_only.strip() else None,
+            }
+            if run_d3_matrix
+            else None
+        ),
         "run_seed_robustness": args.run_seed_robustness,
         "seed_case_mode": args.seed_case_mode if args.run_seed_robustness else None,
         "seed_batches": args.seed_batches if args.run_seed_robustness else None,
+        "acceptance": {
+            "d2_localization": d2_acceptance,
+            "d3_matrix": d3_acceptance,
+        },
         "out_root": str(out_root),
         "tasks": records,
         "passed": all(bool(r.get("passed", False)) for r in records),

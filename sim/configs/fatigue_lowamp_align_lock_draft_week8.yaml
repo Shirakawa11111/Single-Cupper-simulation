@@ -1,0 +1,62 @@
+description: Week-8 lock draft from sweep_calibration_multi.py (source_summary=sim/tests/regress_runs/2026-02-08/calibration_multi_week8_smoke/candidates/cand_001/summary.json).
+virtual_cycle:
+  task: calib_cand_001
+  auto_output: false
+  cycles: 80
+  max_strain: 0.00127324197
+  cycle_points: 80
+  orientation_vector:
+  - -1.0
+  - 1.0
+  - 1.0
+  grid_shape:
+  - 64
+  - 32
+  - 8
+  grid_spacing:
+  - 1.0
+  - 1.0
+  - 1.0
+  grid_periodic:
+  - true
+  - true
+  - false
+  stable_window: 5
+  stable_tol: 0.02
+  stable_metrics:
+  - plastic_range
+  - rss_peak_nd
+  stable_min_cycles: 5
+  pfc_active: false
+  gnd_active: true
+  gnd_burgers: 1.0
+  h_gnd: 0.0
+  toughness_scale: 0.1
+  mech_max_iters: 120
+  mech_outer_max_iters: 3
+  mech_tol: 2.0e-05
+  mech_outer_tol: 2.0e-06
+  mech_regularization: 2.5
+  mech_solution_abs_limit: 8.0
+  mech_accept_rel_residual: 0.01
+  mech_clip_solution_on_limit: true
+  mech_unilateral_mode: volumetric
+  mech_preconditioner: jacobi
+  crack_max_iters: 1200
+  crack_length_threshold: 0.995
+  failure_threshold: 0.999
+  c11: 0.58
+  c12: 0.418122
+  c44: 0.259666
+  yield_tau: 0.04
+  flow_scale: 4.0
+  linear_hardening: 0.0
+calibration_meta:
+  source_summary: sim/tests/regress_runs/2026-02-08/calibration_multi_week8_smoke/candidates/cand_001/summary.json
+  selected_params:
+    max_strain: 0.00127324197
+    c11: 0.58
+    yield_tau: 0.04
+    flow_scale: 4.0
+    linear_hardening: 0.0
+  created_at: '2026-02-08T16:54:16'

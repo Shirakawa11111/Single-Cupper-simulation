@@ -1,0 +1,3 @@
+seed,seed_gate_pass,passed,checks_passed,notch_onset,notch_checks_ok,negative_onset,negative_checks_ok,onset_cases,cases_total,notch_onset_length,notch_cycles_completed,negative_cycles_completed
+103,true,true,true,true,true,false,true,1,2,1,4,4
+104,true,true,true,true,true,false,true,1,2,1,4,4

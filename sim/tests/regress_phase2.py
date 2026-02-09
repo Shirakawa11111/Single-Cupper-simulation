@@ -180,6 +180,27 @@ def main() -> int:
         default=5,
         help="Minimum cycle count passed to regress_energy_consistency.py.",
     )
+    parser.add_argument(
+        "--with-d2-localization",
+        action="store_true",
+        help="Run D2 localization + energy-density regression gate as part of phase-2.",
+    )
+    parser.add_argument(
+        "--d2-localization-config",
+        type=Path,
+        default=Path("sim/configs/d2_localization_energy.yaml"),
+        help="Config path for D2 localization gate.",
+    )
+    parser.add_argument("--d2-min-cycles", type=int, default=3)
+    parser.add_argument("--d2-min-crack-delta", type=float, default=5.0e-2)
+    parser.add_argument("--d2-min-localization-index", type=float, default=3.0)
+    parser.add_argument("--d2-min-energy-crack-mean", type=float, default=1.0e-10)
+    parser.add_argument("--d2-min-energy-total-density-mean", type=float, default=1.0e-10)
+    parser.add_argument("--d2-max-runtime-warnings", type=int, default=None)
+    parser.add_argument("--d2-max-mechanical-not-accepted-steps", type=int, default=None)
+    parser.add_argument("--d2-max-crack-cg-nonconverged-steps", type=int, default=None)
+    parser.add_argument("--d2-max-nonfinite-count", type=int, default=None)
+    parser.add_argument("--d2-min-vtk-energy-fields", type=int, default=4)
     parser.add_argument("--skip-phase1-suite", action="store_true")
     args = parser.parse_args()
 
@@ -308,6 +329,54 @@ def main() -> int:
         ]
         tasks.append(("energy_gate", energy_cmd, energy_out / "summary.json"))
 
+    if args.with_d2_localization:
+        d2_out = out_dir / "d2_localization"
+        d2_cmd = [
+            py,
+            "sim/tests/regress_d2_localization_energy.py",
+            "--config",
+            str(args.d2_localization_config),
+            "--out",
+            str(d2_out / "summary.json"),
+            "--min-cycles",
+            str(args.d2_min_cycles),
+            "--min-crack-delta",
+            str(args.d2_min_crack_delta),
+            "--min-localization-index",
+            str(args.d2_min_localization_index),
+            "--min-energy-crack-mean",
+            str(args.d2_min_energy_crack_mean),
+            "--min-energy-total-density-mean",
+            str(args.d2_min_energy_total_density_mean),
+            "--max-runtime-warnings",
+            str(args.d2_max_runtime_warnings if args.d2_max_runtime_warnings is not None else args.max_runtime_warnings),
+            "--max-mechanical-not-accepted-steps",
+            str(
+                args.d2_max_mechanical_not_accepted_steps
+                if args.d2_max_mechanical_not_accepted_steps is not None
+                else (
+                    args.max_mechanical_not_accepted_steps
+                    if args.max_mechanical_not_accepted_steps is not None
+                    else 160
+                )
+            ),
+            "--max-crack-cg-nonconverged-steps",
+            str(
+                args.d2_max_crack_cg_nonconverged_steps
+                if args.d2_max_crack_cg_nonconverged_steps is not None
+                else (
+                    args.max_crack_cg_nonconverged_steps
+                    if args.max_crack_cg_nonconverged_steps is not None
+                    else 20
+                )
+            ),
+            "--max-nonfinite-count",
+            str(args.d2_max_nonfinite_count if args.d2_max_nonfinite_count is not None else args.max_nonfinite_count),
+            "--min-vtk-energy-fields",
+            str(args.d2_min_vtk_energy_fields),
+        ]
+        tasks.append(("d2_localization", d2_cmd, d2_out / "summary.json"))
+
     started_at = datetime.now()
     results: list[TaskResult] = []
     for name, cmd, summary_json in tasks:
@@ -339,6 +408,18 @@ def main() -> int:
         "with_energy_gate": args.with_energy_gate,
         "energy_gate_config": str(args.energy_gate_config),
         "energy_gate_min_cycles": args.energy_gate_min_cycles,
+        "with_d2_localization": args.with_d2_localization,
+        "d2_localization_config": str(args.d2_localization_config),
+        "d2_min_cycles": args.d2_min_cycles,
+        "d2_min_crack_delta": args.d2_min_crack_delta,
+        "d2_min_localization_index": args.d2_min_localization_index,
+        "d2_min_energy_crack_mean": args.d2_min_energy_crack_mean,
+        "d2_min_energy_total_density_mean": args.d2_min_energy_total_density_mean,
+        "d2_max_runtime_warnings": args.d2_max_runtime_warnings,
+        "d2_max_mechanical_not_accepted_steps": args.d2_max_mechanical_not_accepted_steps,
+        "d2_max_crack_cg_nonconverged_steps": args.d2_max_crack_cg_nonconverged_steps,
+        "d2_max_nonfinite_count": args.d2_max_nonfinite_count,
+        "d2_min_vtk_energy_fields": args.d2_min_vtk_energy_fields,
         "passed": passed,
         "total_runtime_warning_count": total_runtime_warnings,
         "tasks": [

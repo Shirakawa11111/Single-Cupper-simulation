@@ -1,0 +1,41 @@
+name: ci-smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MPLCONFIGDIR: ${{ github.workspace }}/.mplconfig
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+
+      - name: Run CI smoke bundle
+        run: |
+          python sim/tests/run_ci_smoke.py --out-root sim/tests/regress_runs/ci_smoke
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-smoke-artifacts
+          path: |
+            sim/tests/regress_runs/ci_smoke/summary.json
+            sim/tests/regress_runs/ci_smoke/logs
+            sim/tests/regress_runs/ci_smoke/phase2_quick/summary.json
+            sim/tests/regress_runs/ci_smoke/multi_align_smoke/summary.json
+            sim/tests/regress_runs/ci_smoke/seed_ci_smoke

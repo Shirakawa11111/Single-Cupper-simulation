@@ -15,6 +15,21 @@
 - Exp Align Avg RMSE tau (MPa): `{{ALIGN_RMSE_TAU}}`
 - Exp Align Avg RMSE gamma: `{{ALIGN_RMSE_GAMMA}}`
 
+## Units Mapping (nd↔SI)
+- Reference `sigma_ref`: `{{SIGMA_REF_GPA}} GPa` (`{{SIGMA_REF_MPA}} MPa`)
+- Reference `L0`: `{{L0_M}} m`
+- Stress conversion:
+  - `tau_MPa = tau_nd * sigma_ref_MPa`
+  - `tau_nd = tau_MPa / sigma_ref_MPa`
+- Alignment converted metrics:
+  - Avg RMSE tau (MPa): `{{ALIGN_RMSE_TAU}}`
+  - Avg RMSE tau (nd): `{{ALIGN_RMSE_TAU_ND}}`
+  - Avg MAE tau (MPa): `{{ALIGN_MAE_TAU}}`
+  - Avg MAE tau (nd): `{{ALIGN_MAE_TAU_ND}}`
+- Reference docs:
+  - `{{UNITS_MAPPING_DOC}}`
+  - `{{UNITS_EXAMPLE_DOC}}`
+
 ## Artifact Paths
 - Phase2 Summary: `{{PHASE2_SUMMARY}}`
 - Seed Batch 1 Summary: `{{SEED_BATCH1_SUMMARY}}`

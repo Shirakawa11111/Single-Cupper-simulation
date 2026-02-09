@@ -1,0 +1,16 @@
+{
+  "base_config": "sim/configs/crack_onset_scan.yaml",
+  "out_root": "sim/tests/fixtures/seed_ci_smoke/batch_a",
+  "seeds": [
+    101,
+    102
+  ],
+  "case_mode": "pair",
+  "notch_case": "control_notch_mild",
+  "negative_case": "no_notch_control",
+  "duration_s": 12.34,
+  "seed_gate_pass_count": 2,
+  "seed_gate_total": 2,
+  "all_seed_gate_passed": true,
+  "results_csv": "sim/tests/fixtures/seed_ci_smoke/batch_a/results.csv"
+}

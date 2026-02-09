@@ -1,10 +1,12 @@
 release_pack: v2
-updated: "2026-02-08"
+updated: "2026-02-09"
 
 locked_configs:
   crack_onset_scan: sim/configs/crack_onset_scan.yaml
   exp_alignment: sim/configs/fatigue_lowamp_align_locked_v4.yaml
   energy_gate: sim/configs/fatigue_lowamp_align_locked_v4.yaml
+  d2_localization: sim/configs/d2_localization_energy.yaml
+  d3_matrix: sim/configs/d3_multiphysics_matrix.yaml
   seed_repeat: sim/configs/crack_onset_scan.yaml
   multi_alignment_full: sim/configs/exp_alignment_multi_d1_full.yaml
   multi_alignment_skeleton: sim/configs/exp_alignment_multi_skeleton.yaml
@@ -18,6 +20,18 @@ thresholds:
   exp_alignment_mae_tau_max: 25.0
   exp_alignment_rmse_gamma_max: 4.2e-3
   energy_gate_min_cycles: 5
+  d2_min_cycles: 3
+  d2_min_crack_delta: 5.0e-2
+  d2_min_localization_index: 3.0
+  d2_min_energy_crack_mean: 1.0e-10
+  d2_min_energy_total_density_mean: 1.0e-10
+  d2_max_runtime_warnings: 50
+  d2_max_mechanical_not_accepted_steps: 160
+  d2_max_crack_cg_nonconverged_steps: 20
+  d2_max_nonfinite_count: 0
+  d2_min_vtk_energy_fields: 4
+  d3_require_all: true
+  d3_min_pass_count: 3
 
 seed_batches:
   - [41, 42, 43]
