@@ -51,9 +51,12 @@ echo "[3/4] full-case seed robustness batch 2"
   --max-crack-cg-nonconverged-steps 20 \
   --max-nonfinite-count 0
 
-echo "[4/4] multi-condition alignment skeleton (current single condition)"
+echo "[4/4] multi-condition alignment full (5 conditions)"
 "${PYTHON_BIN}" sim/tests/regress_exp_alignment_multi.py \
-  --config sim/configs/exp_alignment_multi_skeleton.yaml \
+  --config sim/configs/exp_alignment_multi_d1_full.yaml \
   --out "${OUT_ROOT}/exp_alignment_multi/summary.json"
 
 echo "[done] release pack v2 commands finished"
+
+echo "[optional] week8 20-seed robustness template:"
+echo "  ${PYTHON_BIN} sim/tests/run_seed_robustness_20.py --base-config sim/configs/crack_onset_scan.yaml --case-mode full --seed-start 41 --seed-count 20 --batch-size 5 --out-root ${OUT_ROOT}/seed_robustness_20"

@@ -6,6 +6,7 @@ locked_configs:
   exp_alignment: sim/configs/fatigue_lowamp_align_locked_v4.yaml
   energy_gate: sim/configs/fatigue_lowamp_align_locked_v4.yaml
   seed_repeat: sim/configs/crack_onset_scan.yaml
+  multi_alignment_full: sim/configs/exp_alignment_multi_d1_full.yaml
   multi_alignment_skeleton: sim/configs/exp_alignment_multi_skeleton.yaml
 
 thresholds:

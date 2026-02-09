@@ -146,6 +146,19 @@ python sim/tests/sweep_crack_onset_doe.py \
 - Week-4 seed 稳健性报告：`docs/week4_seed_robustness_round1_2026-02-07.md`。
 - Week-4 发布基线一键入口：`sim/tests/run_release_baseline_week4.py`。
 - Week-4 发布基线说明：`docs/week4_release_baseline_pack_2026-02-07.md`。
+- Week-8 多工况对齐配置：`sim/configs/exp_alignment_multi_week8.yaml`（5 个循环工况，默认复用首工况 `sim_csv` 以加速）。
+- `sim/tests/regress_exp_alignment_multi.py` 支持 `--reuse-first-sim-csv`（或在 YAML `defaults.reuse_first_sim_csv=true`）用于多工况快速门禁。
+- Week-8 标定扫描骨架：`sim/tests/sweep_calibration_multi.py`（候选参数网格扫描、排名、最佳配置导出、lock 草案写出）。
+- Week-8 20-seed 分批模板：`sim/tests/run_seed_robustness_20.py`（默认 `41-60`，每批 5 个，并自动产出 CI 汇总）。
+- Week-8 seed 置信区间统计：`sim/tests/summarize_seed_robustness_ci.py`（支持跨批次聚合 + Wilson CI）。
+- Week-8 对齐汇总：`docs/week8_multi_condition_summary_2026-02-08.md`。
+- Week-8 seed/产物管理说明：`docs/week8_seed_ci_and_artifact_rules_2026-02-08.md`。
+- Week-9 产物分层治理规则：`docs/week9_artifact_governance_2026-02-08.md`。
+- Week-9 产物清理脚本：`sim/tests/cleanup_artifacts.sh`（默认 dry-run，`--apply` 实删）。
+- D1 全量门禁入口（非 quick，全 case）：`sim/tests/run_d1_full_gate.py`。
+- D1 一键命令包：`sim/tests/d1_full_gate_commands.sh`（默认包含 full-case seed 稳健性批次）。
+- D1 多工况真实配置（5 条件）：`sim/configs/exp_alignment_multi_d1_full.yaml`。
+- Week-8 任务清单：`WEEK8_CHECKLIST.md`。
 - 本周任务跟踪见 `WEEKLY_CHECKLIST.md`。
 - 2026-02-07 全量一体门禁通过记录：
   `sim/tests/regress_runs/2026-02-07/phase2_gate_with_exp_full_locked/summary.json`（`passed=true`）。
