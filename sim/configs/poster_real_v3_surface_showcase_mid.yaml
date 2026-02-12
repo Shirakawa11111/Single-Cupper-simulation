@@ -1,0 +1,38 @@
+description: "Real-data showcase (mid drive) for v3-style poster with visible but non-saturated crack growth."
+virtual_cycle:
+  task: "poster_real_v3_surface_showcase_mid"
+  auto_output: true
+  run_dir: "/Users/bojingkai/Desktop/单晶铜拉伸模拟/sim/tests/runs/2026-02-12/poster_real_v3_surface_showcase_mid"
+  cycles: 2
+  cycle_points: 24
+  print_interval: 4
+  vtk_interval: 2
+  max_strain: 0.012
+  orientation_vector: [1.0, 1.0, 1.0]
+  grid_shape: [32, 16, 8]
+  grid_spacing: [1.0, 1.0, 1.0]
+  grid_periodic: [true, true, false]
+  notch_box:
+    - [11.2, 14.4]
+    - [14.0, 15.8]
+    - [2.8, 5.2]
+  notch_crack_value: 0.72
+  pfc_active: false
+  gnd_active: true
+  h_gnd: 1.0e-4
+  toughness_scale: 0.06
+  crack_relax: 0.10
+  failure_threshold: 0.999
+  crack_max_iters: 1200
+  mech_max_iters: 80
+  mech_outer_max_iters: 2
+  mech_tol: 5.0e-5
+  mech_outer_tol: 5.0e-6
+  mech_regularization: 2.0
+  mech_accept_rel_residual: 1.0e-2
+  mech_accept_incomplete_cg: true
+  mech_enable_gmres_fallback: false
+  mech_solution_abs_limit: 10.0
+  mech_clip_solution_on_limit: true
+  mech_unilateral_mode: volumetric
+  mech_preconditioner: jacobi

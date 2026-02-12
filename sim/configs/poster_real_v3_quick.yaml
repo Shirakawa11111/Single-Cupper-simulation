@@ -1,0 +1,23 @@
+description: "Real-data quick run for v3-style poster visualization (two-cycle notch case)."
+virtual_cycle:
+  task: "poster_real_v3_quick"
+  auto_output: true
+  run_dir: "/Users/bojingkai/Desktop/单晶铜拉伸模拟/sim/tests/runs/2026-02-12/poster_real_v3_quick"
+  cycles: 2
+  cycle_points: 24
+  print_interval: 4
+  vtk_interval: 2
+  max_strain: 0.005
+  orientation_vector: [1.0, 1.0, 1.0]
+  grid_shape: [32, 16, 8]
+  grid_spacing: [1.0, 1.0, 1.0]
+  grid_periodic: [true, true, false]
+  notch_box:
+    - [11.2, 14.4]
+    - [7.2, 8.8]
+    - [2.8, 5.2]
+  notch_crack_value: 0.6
+  pfc_active: false
+  gnd_active: true
+  h_gnd: 1.0e-4
+  toughness_scale: 0.1
