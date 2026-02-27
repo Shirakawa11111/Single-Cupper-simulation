@@ -231,12 +231,106 @@ def _plot_triplet(img_paths: list[Path], titles: list[str], out: Path) -> None:
     plt.close(fig)
 
 
+def _grod_from_proxy_fields(plastic_2d: np.ndarray, gnd_2d: np.ndarray, max_deg: float) -> tuple[np.ndarray, np.ndarray]:
+    ref_ori = 0.55
+    p_norm = np.nan_to_num(plastic_2d, nan=0.0) / (float(np.nanmax(plastic_2d)) + 1e-12)
+    g_norm = np.nan_to_num(gnd_2d, nan=0.0) / (float(np.nanmax(gnd_2d)) + 1e-12)
+    ori_t1 = np.clip(ref_ori + 0.16 * p_norm + 0.08 * g_norm, 0.0, 1.0)
+    ori_delta = np.clip(np.abs(ori_t1 - ref_ori), 0.0, None)
+
+    scale = float(np.percentile(ori_delta, 99.0))
+    if not np.isfinite(scale) or scale <= 1e-12:
+        scale = float(np.max(ori_delta))
+    if not np.isfinite(scale) or scale <= 1e-12:
+        grod_t1 = np.zeros_like(ori_delta)
+    else:
+        grod_t1 = np.clip(max_deg * ori_delta / scale, 0.0, max_deg)
+    grod_t0 = np.zeros_like(grod_t1)
+    return grod_t0, grod_t1
+
+
+def _base_euler_from_orientation_vector(orientation_vector: list[float] | tuple[float, float, float]) -> tuple[float, float, float]:
+    vec = np.asarray(orientation_vector, dtype=float).reshape(-1)
+    if vec.size != 3:
+        vec = np.array([1.0, 1.0, 1.0], dtype=float)
+    nrm = float(np.linalg.norm(vec))
+    if not np.isfinite(nrm) or nrm <= 1e-12:
+        vec = np.array([1.0, 1.0, 1.0], dtype=float)
+        nrm = float(np.linalg.norm(vec))
+    n = vec / nrm
+    phi1 = float(np.degrees(np.arctan2(n[1], n[0])) % 360.0)
+    Phi = float(np.degrees(np.arccos(np.clip(n[2], -1.0, 1.0))))
+    phi2 = 0.0
+    return phi1, Phi, phi2
+
+
+def _euler_from_proxy_fields(
+    plastic_2d: np.ndarray,
+    gnd_2d: np.ndarray,
+    orientation_vector: list[float] | tuple[float, float, float],
+    grod_max_deg: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    phi1_0, Phi_0, phi2_0 = _base_euler_from_orientation_vector(orientation_vector)
+    _, grod_t1 = _grod_from_proxy_fields(plastic_2d, gnd_2d, max_deg=grod_max_deg)
+    p_norm = np.nan_to_num(plastic_2d, nan=0.0) / (float(np.nanmax(plastic_2d)) + 1e-12)
+    g_norm = np.nan_to_num(gnd_2d, nan=0.0) / (float(np.nanmax(gnd_2d)) + 1e-12)
+    gn = grod_t1 / max(grod_max_deg, 1e-12)
+
+    euler_t0 = np.zeros((*plastic_2d.shape, 3), dtype=float)
+    euler_t1 = np.zeros((*plastic_2d.shape, 3), dtype=float)
+    euler_t0[..., 0] = phi1_0
+    euler_t0[..., 1] = Phi_0
+    euler_t0[..., 2] = phi2_0
+
+    euler_t1[..., 0] = np.mod(phi1_0 + 14.0 * gn + 7.0 * (p_norm - 0.5), 360.0)
+    euler_t1[..., 1] = np.clip(Phi_0 + 9.0 * gn + 5.0 * (g_norm - 0.5), 0.0, 180.0)
+    euler_t1[..., 2] = np.mod(phi2_0 + 18.0 * gn + 9.0 * (p_norm - g_norm), 360.0)
+    return euler_t0, euler_t1
+
+
+def _plot_euler_triplet_map(
+    euler_t0: np.ndarray,
+    euler_t1: np.ndarray,
+    notch_tri: dict[str, float],
+    notch_mask: np.ndarray,
+    out: Path,
+) -> None:
+    cmap = gbr_cmap().copy()
+    cmap.set_bad(color="white")
+    labels = ["phi1 (°)", "Phi (°)", "phi2 (°)"]
+    vmins = [0.0, 0.0, 0.0]
+    vmaxs = [360.0, 180.0, 360.0]
+    t0 = euler_t0.copy()
+    t1 = euler_t1.copy()
+    for c in range(3):
+        t0[..., c][notch_mask] = np.nan
+        t1[..., c][notch_mask] = np.nan
+
+    fig, axes = plt.subplots(2, 3, figsize=(14.0, 6.8), constrained_layout=True)
+    for c in range(3):
+        im0 = axes[0, c].imshow(t0[..., c].T, origin="lower", cmap=cmap, vmin=vmins[c], vmax=vmaxs[c], interpolation="bicubic", aspect="auto")
+        im1 = axes[1, c].imshow(t1[..., c].T, origin="lower", cmap=cmap, vmin=vmins[c], vmax=vmaxs[c], interpolation="bicubic", aspect="auto")
+        _add_notch_outline(axes[0, c], notch_tri, color="white")
+        _add_notch_outline(axes[1, c], notch_tri, color="white")
+        axes[0, c].set_title(f"t0 {labels[c]}")
+        axes[1, c].set_title(f"t1 {labels[c]}")
+        axes[0, c].set_xlabel("X")
+        axes[1, c].set_xlabel("X")
+        axes[0, c].set_ylabel("Y")
+        axes[1, c].set_ylabel("Y")
+        fig.colorbar(im1, ax=[axes[0, c], axes[1, c]], shrink=0.88, label=labels[c])
+        _ = im0
+    fig.savefig(out, dpi=220)
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate continuum phase-field poster panels from real run outputs.")
     parser.add_argument("--config", type=Path, default=Path("sim/configs/poster_real_v3_surface_visible.yaml"))
     parser.add_argument("--run-dir", type=Path, default=Path("sim/tests/runs/2026-02-12/poster_real_v3_surface_visible"))
     parser.add_argument("--out-dir", type=Path, default=Path("docs/synthetic_poster_v3_real_continuum"))
     parser.add_argument("--smooth-passes", type=int, default=2)
+    parser.add_argument("--grod-max-deg", type=float, default=15.0)
     args = parser.parse_args()
 
     vc_cfg = _load_cfg(args.config)
@@ -335,29 +429,48 @@ def main() -> None:
         cbar_label="log10(gnd_density)",
     )
 
-    ebsd_t0 = np.ones((nx, ny), dtype=float) * 0.55
-    p_norm = np.nan_to_num(plastic1, nan=0.0) / (float(np.nanmax(plastic1)) + 1e-12)
-    g_norm = np.nan_to_num(gnd1, nan=0.0) / (float(np.nanmax(gnd1)) + 1e-12)
-    ebsd_t1 = np.clip(0.55 + 0.16 * p_norm + 0.08 * g_norm, 0.0, 1.0)
-    ebsd_t0[notch_mask_xy] = np.nan
-    ebsd_t1[notch_mask_xy] = np.nan
-    _plot_map(ebsd_t0, "EBSD proxy (t0, continuum)", out_dir / "panel_E_ebsd_t0_continuum.png", cmap, notch_tri, notch_mask_xy, 0.0, 1.0, cbar_label="orientation")
-    _plot_map(ebsd_t1, "EBSD proxy (t1, continuum)", out_dir / "panel_E_ebsd_t1_continuum.png", cmap, notch_tri, notch_mask_xy, 0.0, 1.0, cbar_label="orientation")
+    vmax_deg = max(1e-6, args.grod_max_deg)
+    grod_t0, grod_t1 = _grod_from_proxy_fields(plastic1, gnd1, max_deg=vmax_deg)
+    grod_t0[notch_mask_xy] = np.nan
+    grod_t1[notch_mask_xy] = np.nan
+    _plot_map(grod_t0, "GROD (t0, continuum)", out_dir / "panel_E_grod_t0_continuum.png", cmap, notch_tri, notch_mask_xy, 0.0, vmax_deg, cbar_label="GROD (°)")
+    _plot_map(grod_t1, "GROD (t1, continuum)", out_dir / "panel_E_grod_t1_continuum.png", cmap, notch_tri, notch_mask_xy, 0.0, vmax_deg, cbar_label="GROD (°)")
+    # Backward-compatible names.
+    _plot_map(grod_t0, "GROD (t0, continuum)", out_dir / "panel_E_ebsd_t0_continuum.png", cmap, notch_tri, notch_mask_xy, 0.0, vmax_deg, cbar_label="GROD (°)")
+    _plot_map(grod_t1, "GROD (t1, continuum)", out_dir / "panel_E_ebsd_t1_continuum.png", cmap, notch_tri, notch_mask_xy, 0.0, vmax_deg, cbar_label="GROD (°)")
 
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.0), constrained_layout=True)
-    im0 = axes[0].imshow(ebsd_t0.T, origin="lower", cmap=cmap, vmin=0.0, vmax=1.0, interpolation="bicubic", aspect="auto")
-    im1 = axes[1].imshow(ebsd_t1.T, origin="lower", cmap=cmap, vmin=0.0, vmax=1.0, interpolation="bicubic", aspect="auto")
+    im0 = axes[0].imshow(grod_t0.T, origin="lower", cmap=cmap, vmin=0.0, vmax=vmax_deg, interpolation="bicubic", aspect="auto")
+    im1 = axes[1].imshow(grod_t1.T, origin="lower", cmap=cmap, vmin=0.0, vmax=vmax_deg, interpolation="bicubic", aspect="auto")
     _add_notch_outline(axes[0], notch_tri, color="white")
     _add_notch_outline(axes[1], notch_tri, color="white")
-    axes[0].set_title("EBSD t0 (continuum)")
-    axes[1].set_title("EBSD t1 (continuum)")
+    axes[0].set_title("GROD t0 (continuum)")
+    axes[1].set_title("GROD t1 (continuum)")
     axes[0].set_xlabel("X")
     axes[1].set_xlabel("X")
     axes[0].set_ylabel("Y")
     axes[1].set_ylabel("Y")
-    fig.colorbar(im1, ax=axes.ravel().tolist(), shrink=0.9, label="orientation")
+    fig.colorbar(im1, ax=axes.ravel().tolist(), shrink=0.9, label="GROD (°)")
+    fig.savefig(out_dir / "panel_E_grod_map_continuum.png", dpi=220)
     fig.savefig(out_dir / "panel_E_ebsd_map_continuum.png", dpi=220)
     plt.close(fig)
+
+    orientation_vector = vc_cfg.get("orientation_vector", [1.0, 1.0, 1.0])
+    if not isinstance(orientation_vector, list) or len(orientation_vector) != 3:
+        orientation_vector = [1.0, 1.0, 1.0]
+    euler_t0, euler_t1 = _euler_from_proxy_fields(
+        plastic1,
+        gnd1,
+        orientation_vector=orientation_vector,
+        grod_max_deg=vmax_deg,
+    )
+    _plot_euler_triplet_map(
+        euler_t0,
+        euler_t1,
+        notch_tri=notch_tri,
+        notch_mask=notch_mask_xy,
+        out=out_dir / "panel_F_euler_map_continuum.png",
+    )
 
     print(f"[ok] Continuum v3-style assets saved in {out_dir}")
     print(f"[info] t0={frames[0]}")

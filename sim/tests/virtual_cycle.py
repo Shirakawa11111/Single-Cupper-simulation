@@ -76,6 +76,8 @@ def run_virtual_cycles(
     max_strain: float = 0.02,      # 拉伸峰值（低应力/屈服平台场景）
     min_strain: float | None = None,  # 若为 None，使用对称 -max_strain
     segment_steps: int = 50,       # 每个子段（0->峰值）步数
+    print_interval: int = 5,       # 进度打印间隔（步）
+    vtk_interval: int = 5,         # VTK 输出间隔（步）
     monotonic: bool = False,       # 若为 True，仅做 0->+max_strain 单调拉伸，便于 σ–ε 标定
     failure_threshold: float = 0.98,  # 平均裂纹达到此值提前终止
     csv_output: Path | None = None,
@@ -148,6 +150,8 @@ def run_virtual_cycles(
     auto_output: bool = False,              # 若 True 且 run_dir 提供/默认，则自动填充输出文件
     export_energy_fields: bool = False,     # 若 True，输出能量密度/裂纹驱动力场到 VTK 并记录周期统计
     pfc_active: bool = True,                # 是否演化 PFC
+    pfc_fft_threads: int | None = None,      # PFC FFT 线程数（None=默认）
+    pfc_use_pyfftw: bool | None = None,      # 是否使用 pyFFTW（None=默认）
     gnd_active: bool = False,               # 是否输出 GND 诊断
     gnd_burgers: float = 1.0,               # Burgers 向量尺度（无量纲）
     diagnostics_out: dict[str, float | int | bool] | None = None,  # 可选：回填数值稳定诊断
@@ -306,7 +310,14 @@ def run_virtual_cycles(
         mechanical = MechanicalEquilibriumSolver(
             grid, copper, structure.orientation, fracture_k=fracture.k, config=mech_cfg
         )
-        pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
+        pfc = PFCEvolver(
+            grid,
+            pfc_params,
+            dt=5e-3,
+            clip=1.2,
+            fft_threads=pfc_fft_threads,
+            use_pyfftw=(pfc_use_pyfftw if pfc_use_pyfftw is not None else True),
+        )
         solver_cfg = SolverConfig(
             dt=5e-3,
             crack_relax=crack_relax,
@@ -345,6 +356,7 @@ def run_virtual_cycles(
             structure.fields[key] = solver.state[key].copy()
         if initial_vtk:
             write_vtk(initial_vtk.with_name(initial_vtk.stem + "_prerelax.vtk"), grid, structure.fields, macro_strain=(0.0, 0.0, 0.0), deform_coordinates=False)
+        print("[Pre-relax] done")
     # 统一裂纹长度参考点 x0
     crack_length_x0_resolved = crack_length_x0
     if crack_length_x0_resolved is None:
@@ -359,7 +371,14 @@ def run_virtual_cycles(
                 x0=0.0,
             )
     # pfc_extra_mu 将在 solver 内传入
-    pfc = PFCEvolver(grid, pfc_params, dt=5e-3, clip=1.2)
+    pfc = PFCEvolver(
+        grid,
+        pfc_params,
+        dt=5e-3,
+        clip=1.2,
+        fft_threads=pfc_fft_threads,
+        use_pyfftw=(pfc_use_pyfftw if pfc_use_pyfftw is not None else True),
+    )
     solver_cfg = SolverConfig(
         dt=5e-3,
         crack_relax=crack_relax,
@@ -431,6 +450,9 @@ def run_virtual_cycles(
             )
         segment_steps = points_per_segment
 
+
+    print_every = max(1, int(print_interval)) if print_interval is not None else 0
+    vtk_every = max(1, int(vtk_interval)) if vtk_interval is not None else 0
     for cycle in range(1, cycles + 1):
         print(f"=== Starting Cycle {cycle} ===")
         energy_val = 0.0
@@ -524,9 +546,17 @@ def run_virtual_cycles(
                     )
                 )
 
-                if step % 5 == 0:
+                if print_every > 0 and step % print_every == 0:
+                    last_mech = step_diag.get("mechanical_last_solver_used", "cg")
+                    last_rel = step_diag.get("mechanical_last_rel_residual", 0.0)
+                    last_crack = step_diag.get("crack_cg_info", 0)
+                    print(
+                        f"  Cycle {cycle} Substep {step}/{segment_steps} | Strain {current_strain:.4f} | "
+                        f"mech={last_mech} rel={last_rel:.2e} crack_info={int(last_crack)}"
+                    )
+
+                if vtk_every > 0 and step % vtk_every == 0:
                     frame_id += 1
-                    print(f"  Cycle {cycle} Substep {step}/{segment_steps} | Strain {current_strain:.4f}")
                     if vtk_dir:
                         vtk_dir.mkdir(parents=True, exist_ok=True)
                         if export_energy_fields:

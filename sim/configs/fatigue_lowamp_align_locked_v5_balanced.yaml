@@ -1,0 +1,53 @@
+description: "Week-5 balanced hysteresis tuning in engineering space."
+virtual_cycle:
+  task: "fatigue_lowamp_align_locked_v5_balanced"
+  auto_output: false
+  cycles: 80
+  max_strain: 0.00124
+  cycle_points: 80
+  orientation_vector: [-1.0, 1.0, 1.0]
+  grid_shape: [64, 32, 8]
+  grid_spacing: [1.0, 1.0, 1.0]
+  grid_periodic: [true, true, false]
+  stable_window: 5
+  stable_tol: 0.02
+  stable_metrics: ["plastic_range", "rss_peak_nd"]
+  stable_min_cycles: 5
+  pfc_active: false
+  gnd_active: true
+  gnd_burgers: 1.0
+  h_gnd: 0.0
+  toughness_scale: 0.1
+
+  # Solver lock
+  mech_max_iters: 120
+  mech_outer_max_iters: 3
+  mech_tol: 2.0e-5
+  mech_outer_tol: 2.0e-6
+  mech_regularization: 2.5
+  mech_solution_abs_limit: 8.0
+  mech_accept_rel_residual: 0.01
+  mech_clip_solution_on_limit: true
+  mech_unilateral_mode: volumetric
+  mech_preconditioner: jacobi
+  crack_max_iters: 1200
+  crack_length_threshold: 0.995
+  failure_threshold: 0.999
+
+  # Elastic constants (same as v4)
+  c11: 0.58
+  c12: 0.418122
+  c44: 0.259666
+
+  # Balanced narrowing (less aggressive than v5_narrow)
+  yield_tau: 1.20e-4
+  flow_scale: 7.2e-4
+  linear_hardening: 5.2e-4
+  h_iso: 5.2e-4
+  visco_exponent: 3.2
+  slip_exponent: 9.0
+  plastic_relax: 0.07
+
+  csv_output: sim/tests/regress_runs/2026-02-27/fatigue_lowamp_align_locked_v5_balanced/virtual_cycle.csv
+  analysis_csv: sim/tests/regress_runs/2026-02-27/fatigue_lowamp_align_locked_v5_balanced/virtual_cycle_analysis.csv
+  stress_strain_csv: sim/tests/regress_runs/2026-02-27/fatigue_lowamp_align_locked_v5_balanced/virtual_cycle_stress_strain.csv

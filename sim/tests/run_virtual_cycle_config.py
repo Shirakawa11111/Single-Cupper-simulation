@@ -39,8 +39,46 @@ TUPLE_KEYS = {
     "grid_periodic",
     "stable_metrics",
 }
-
-
+FLOAT_KEYS = {
+    "mech_tol",
+    "mech_accept_rel_residual",
+    "mech_preconditioner_floor",
+    "mech_preconditioner_g_min",
+    "crack_tol",
+    "crack_accept_rel_residual",
+    "max_strain",
+    "min_strain",
+    "crack_relax",
+    "plastic_relax",
+    "toughness_scale",
+    "stress_mu_weight",
+    "notch_crack_value",
+    "pre_relax_strain",
+    "yield_tau",
+    "flow_scale",
+    "linear_hardening",
+    "visco_exponent",
+    "gamma0",
+    "slip_exponent",
+    "h_iso",
+    "h_gnd",
+    "c11",
+    "c12",
+    "c44",
+}
+INT_KEYS = {
+    "segment_steps",
+    "cycles",
+    "pre_relax_steps",
+    "mech_max_iters",
+    "mech_outer_max_iters",
+    "mech_gmres_restart",
+    "mech_gmres_maxiter",
+    "crack_max_iters",
+    "print_interval",
+    "vtk_interval",
+    "pfc_fft_threads",
+}
 def _is_finite_tree(value: Any) -> bool:
     if isinstance(value, dict):
         return all(_is_finite_tree(v) for v in value.values())
@@ -95,6 +133,19 @@ def _normalize_config(cfg: dict[str, Any]) -> dict[str, Any]:
         out["grid_spacing"] = tuple(float(v) for v in out["grid_spacing"])
     if "orientation_vector" in out and out["orientation_vector"] is not None:
         out["orientation_vector"] = tuple(float(v) for v in out["orientation_vector"])
+
+    for key in FLOAT_KEYS:
+        if key in out and isinstance(out[key], str):
+            try:
+                out[key] = float(out[key])
+            except ValueError:
+                pass
+    for key in INT_KEYS:
+        if key in out and isinstance(out[key], str):
+            try:
+                out[key] = int(float(out[key]))
+            except ValueError:
+                pass
     return out
 
 

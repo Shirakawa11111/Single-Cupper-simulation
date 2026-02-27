@@ -10,6 +10,8 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml  # type: ignore
@@ -191,40 +193,125 @@ def plot_atoms(
     plt.close(fig)
 
 
-def plot_ebsd_map(ori: np.ndarray, notch_mask: np.ndarray, out: Path, title: str) -> None:
+def plot_grod_map(grod_deg: np.ndarray, notch_mask: np.ndarray, out: Path, title: str, vmax_deg: float) -> None:
     cmap = gbr_cmap().copy()
     cmap.set_bad(color="white")
-    ori_masked = ori.copy()
-    ori_masked[notch_mask] = np.nan
+    grod_masked = grod_deg.copy()
+    grod_masked[notch_mask] = np.nan
     plt.figure(figsize=(6.0, 4.0))
-    im = plt.imshow(ori_masked.T, origin="lower", cmap=cmap, vmin=0.0, vmax=1.0, aspect="auto")
+    im = plt.imshow(grod_masked.T, origin="lower", cmap=cmap, vmin=0.0, vmax=vmax_deg, aspect="auto")
     plt.title(title)
     plt.xlabel("X")
     plt.ylabel("Y")
-    plt.colorbar(im, label="orientation")
+    plt.colorbar(im, label="GROD (°)")
     plt.tight_layout()
     plt.savefig(out, dpi=220)
     plt.close()
 
 
-def plot_ebsd_pair_map(ori_t0: np.ndarray, ori_t1: np.ndarray, notch_mask: np.ndarray, out: Path) -> None:
+def plot_grod_pair_map(grod_t0: np.ndarray, grod_t1: np.ndarray, notch_mask: np.ndarray, out: Path, vmax_deg: float) -> None:
     cmap = gbr_cmap().copy()
     cmap.set_bad(color="white")
-    t0 = ori_t0.copy()
-    t1 = ori_t1.copy()
+    t0 = grod_t0.copy()
+    t1 = grod_t1.copy()
     t0[notch_mask] = np.nan
     t1[notch_mask] = np.nan
 
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.0), constrained_layout=True)
-    im0 = axes[0].imshow(t0.T, origin="lower", cmap=cmap, vmin=0.0, vmax=1.0, aspect="auto")
-    im1 = axes[1].imshow(t1.T, origin="lower", cmap=cmap, vmin=0.0, vmax=1.0, aspect="auto")
-    axes[0].set_title("EBSD t0")
-    axes[1].set_title("EBSD t1")
+    im0 = axes[0].imshow(t0.T, origin="lower", cmap=cmap, vmin=0.0, vmax=vmax_deg, aspect="auto")
+    im1 = axes[1].imshow(t1.T, origin="lower", cmap=cmap, vmin=0.0, vmax=vmax_deg, aspect="auto")
+    axes[0].set_title("GROD t0")
+    axes[1].set_title("GROD t1")
     axes[0].set_xlabel("X")
     axes[1].set_xlabel("X")
     axes[0].set_ylabel("Y")
     axes[1].set_ylabel("Y")
-    fig.colorbar(im1, ax=axes.ravel().tolist(), shrink=0.9, label="orientation")
+    fig.colorbar(im1, ax=axes.ravel().tolist(), shrink=0.9, label="GROD (°)")
+    fig.savefig(out, dpi=220)
+    plt.close(fig)
+
+
+def _grod_from_proxy_fields(plastic_2d: np.ndarray, gnd_2d: np.ndarray, max_deg: float) -> tuple[np.ndarray, np.ndarray]:
+    ref_ori = 0.55
+    p_norm = plastic_2d / (float(np.max(plastic_2d)) + 1e-12)
+    g_norm = gnd_2d / (float(np.max(gnd_2d)) + 1e-12)
+    ori_t1 = np.clip(ref_ori + 0.18 * p_norm + 0.10 * g_norm, 0.0, 1.0)
+    ori_delta = np.clip(np.abs(ori_t1 - ref_ori), 0.0, None)
+
+    scale = float(np.percentile(ori_delta, 99.0))
+    if not np.isfinite(scale) or scale <= 1e-12:
+        scale = float(np.max(ori_delta))
+    if not np.isfinite(scale) or scale <= 1e-12:
+        grod_t1 = np.zeros_like(ori_delta)
+    else:
+        grod_t1 = np.clip(max_deg * ori_delta / scale, 0.0, max_deg)
+    grod_t0 = np.zeros_like(grod_t1)
+    return grod_t0, grod_t1
+
+
+def _base_euler_from_orientation_vector(orientation_vector: list[float] | tuple[float, float, float]) -> tuple[float, float, float]:
+    vec = np.asarray(orientation_vector, dtype=float).reshape(-1)
+    if vec.size != 3:
+        vec = np.array([1.0, 1.0, 1.0], dtype=float)
+    nrm = float(np.linalg.norm(vec))
+    if not np.isfinite(nrm) or nrm <= 1e-12:
+        vec = np.array([1.0, 1.0, 1.0], dtype=float)
+        nrm = float(np.linalg.norm(vec))
+    n = vec / nrm
+    phi1 = float(np.degrees(np.arctan2(n[1], n[0])) % 360.0)
+    Phi = float(np.degrees(np.arccos(np.clip(n[2], -1.0, 1.0))))
+    phi2 = 0.0
+    return phi1, Phi, phi2
+
+
+def _euler_from_proxy_fields(
+    plastic_2d: np.ndarray,
+    gnd_2d: np.ndarray,
+    orientation_vector: list[float] | tuple[float, float, float],
+    grod_max_deg: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    phi1_0, Phi_0, phi2_0 = _base_euler_from_orientation_vector(orientation_vector)
+    _, grod_t1 = _grod_from_proxy_fields(plastic_2d, gnd_2d, max_deg=grod_max_deg)
+    p_norm = plastic_2d / (float(np.max(plastic_2d)) + 1e-12)
+    g_norm = gnd_2d / (float(np.max(gnd_2d)) + 1e-12)
+    gn = grod_t1 / max(grod_max_deg, 1e-12)
+
+    euler_t0 = np.zeros((*plastic_2d.shape, 3), dtype=float)
+    euler_t1 = np.zeros((*plastic_2d.shape, 3), dtype=float)
+    euler_t0[..., 0] = phi1_0
+    euler_t0[..., 1] = Phi_0
+    euler_t0[..., 2] = phi2_0
+
+    euler_t1[..., 0] = np.mod(phi1_0 + 16.0 * gn + 8.0 * (p_norm - 0.5), 360.0)
+    euler_t1[..., 1] = np.clip(Phi_0 + 10.0 * gn + 6.0 * (g_norm - 0.5), 0.0, 180.0)
+    euler_t1[..., 2] = np.mod(phi2_0 + 20.0 * gn + 10.0 * (p_norm - g_norm), 360.0)
+    return euler_t0, euler_t1
+
+
+def plot_euler_triplet_map(euler_t0: np.ndarray, euler_t1: np.ndarray, notch_mask: np.ndarray, out: Path) -> None:
+    cmap = gbr_cmap().copy()
+    cmap.set_bad(color="white")
+    labels = ["phi1 (°)", "Phi (°)", "phi2 (°)"]
+    vmaxs = [360.0, 180.0, 360.0]
+    vmins = [0.0, 0.0, 0.0]
+    t0 = euler_t0.copy()
+    t1 = euler_t1.copy()
+    for c in range(3):
+        t0[..., c][notch_mask] = np.nan
+        t1[..., c][notch_mask] = np.nan
+
+    fig, axes = plt.subplots(2, 3, figsize=(14.0, 6.8), constrained_layout=True)
+    for c in range(3):
+        im0 = axes[0, c].imshow(t0[..., c].T, origin="lower", cmap=cmap, vmin=vmins[c], vmax=vmaxs[c], aspect="auto")
+        im1 = axes[1, c].imshow(t1[..., c].T, origin="lower", cmap=cmap, vmin=vmins[c], vmax=vmaxs[c], aspect="auto")
+        axes[0, c].set_title(f"t0 {labels[c]}")
+        axes[1, c].set_title(f"t1 {labels[c]}")
+        axes[0, c].set_xlabel("X")
+        axes[1, c].set_xlabel("X")
+        axes[0, c].set_ylabel("Y")
+        axes[1, c].set_ylabel("Y")
+        fig.colorbar(im1, ax=[axes[0, c], axes[1, c]], shrink=0.88, label=labels[c])
+        _ = im0
     fig.savefig(out, dpi=220)
     plt.close(fig)
 
@@ -249,6 +336,7 @@ def main() -> None:
         default=Path("docs/synthetic_poster_v3_real"),
         help="Output directory for v3-style panels.",
     )
+    parser.add_argument("--grod-max-deg", type=float, default=15.0, help="Upper color scale for GROD map in degrees.")
     parser.add_argument("--notch-threshold", type=float, default=0.5, help="Kept for compatibility (unused in surface-notch mode).")
     args = parser.parse_args()
 
@@ -352,24 +440,39 @@ def main() -> None:
     plastic1_2d = np.max(fields1["accum_plastic"], axis=2)
     gnd1_2d = np.max(fields1["gnd_density"], axis=2)
 
-    ebsd_t0 = np.ones_like(crack0_2d) * 0.55
-    p_norm = plastic1_2d / (float(np.max(plastic1_2d)) + 1e-12)
-    g_norm = gnd1_2d / (float(np.max(gnd1_2d)) + 1e-12)
-    ebsd_t1 = np.clip(0.55 + 0.18 * p_norm + 0.10 * g_norm, 0.0, 1.0)
-
-    ebsd_t0_vals = _point_values_from_field2d(ebsd_t0, shape[2])[keep_mask]
+    grod_t0, grod_t1 = _grod_from_proxy_fields(plastic1_2d, gnd1_2d, max_deg=max(1e-6, args.grod_max_deg))
+    grod_t1_vals = _point_values_from_field2d(grod_t1, shape[2])[keep_mask]
     plot_atoms(
         points_carved,
-        ebsd_t0_vals,
-        "EBSD proxy (t0)",
-        out_dir / "panel_E_ebsd_atoms.png",
+        grod_t1_vals,
+        "GROD (t1, deg)",
+        out_dir / "panel_E_grod_atoms.png",
         notch_tri=notch_tri,
         show_notch=True,
+        vmin=0.0,
+        vmax=max(1e-6, args.grod_max_deg),
     )
     notch_mask_2d = _surface_tri_mask_xy(shape[0], shape[1], notch_tri)
-    plot_ebsd_map(ebsd_t0, notch_mask_2d, out_dir / "panel_E_ebsd_t0.png", "EBSD proxy (t0)")
-    plot_ebsd_map(ebsd_t1, notch_mask_2d, out_dir / "panel_E_ebsd_t1.png", "EBSD proxy (t1, post-tension)")
-    plot_ebsd_pair_map(ebsd_t0, ebsd_t1, notch_mask_2d, out_dir / "panel_E_ebsd_map.png")
+    vmax_deg = max(1e-6, args.grod_max_deg)
+    plot_grod_map(grod_t0, notch_mask_2d, out_dir / "panel_E_grod_t0.png", "GROD (t0)", vmax_deg=vmax_deg)
+    plot_grod_map(grod_t1, notch_mask_2d, out_dir / "panel_E_grod_t1.png", "GROD (t1, post-tension)", vmax_deg=vmax_deg)
+    plot_grod_pair_map(grod_t0, grod_t1, notch_mask_2d, out_dir / "panel_E_grod_map.png", vmax_deg=vmax_deg)
+
+    # Backward-compatible file names for existing poster assembly scripts.
+    plot_grod_map(grod_t0, notch_mask_2d, out_dir / "panel_E_ebsd_t0.png", "GROD (t0)", vmax_deg=vmax_deg)
+    plot_grod_map(grod_t1, notch_mask_2d, out_dir / "panel_E_ebsd_t1.png", "GROD (t1, post-tension)", vmax_deg=vmax_deg)
+    plot_grod_pair_map(grod_t0, grod_t1, notch_mask_2d, out_dir / "panel_E_ebsd_map.png", vmax_deg=vmax_deg)
+
+    orientation_vector = vc_cfg.get("orientation_vector", [1.0, 1.0, 1.0])
+    if not isinstance(orientation_vector, list) or len(orientation_vector) != 3:
+        orientation_vector = [1.0, 1.0, 1.0]
+    euler_t0, euler_t1 = _euler_from_proxy_fields(
+        plastic1_2d,
+        gnd1_2d,
+        orientation_vector=orientation_vector,
+        grod_max_deg=vmax_deg,
+    )
+    plot_euler_triplet_map(euler_t0, euler_t1, notch_mask_2d, out_dir / "panel_F_euler_map.png")
 
     print(f"[ok] Real v3-style poster assets saved in {out_dir}")
     print(f"[info] t0={t0_path}")
