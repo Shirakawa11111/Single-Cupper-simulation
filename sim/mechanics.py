@@ -76,6 +76,8 @@ class MechanicalConfig:
     # Accept finite CG result even when info>0 (incomplete convergence),
     # to avoid hard stalls in singular/near-singular regimes.
     accept_incomplete_cg: bool = False
+    # If True, allow accepting finite incomplete CG solution even when residual is non-finite.
+    accept_incomplete_without_residual: bool = False
     # Reject iterative solutions with unrealistic absolute magnitude.
     solution_abs_limit: float = 10.0
     # When True, clip solution to `solution_abs_limit` instead of rejecting it.
@@ -88,6 +90,13 @@ class MechanicalConfig:
     preconditioner: Literal["none", "jacobi"] = "none"
     preconditioner_floor: float = 1e-5
     preconditioner_g_min: float = 5e-2
+    # Displacement-driven loading (Dirichlet penalty) on x-min/x-max boundaries.
+    displacement_bc_x: bool = False
+    displacement_bc_penalty: float = 1e6
+    displacement_bc_anchor_lateral: bool = True
+    displacement_bc_hard: bool = False
+    # Solve mechanics in normalized coordinates (x*=x/Lref, u*=u/Lref) for better conditioning.
+    nondim_kinematics: bool = False
 
 
 class MechanicalEquilibriumSolver:
@@ -113,6 +122,10 @@ class MechanicalEquilibriumSolver:
         self.last_solve_info: dict[str, int | float | bool | str] = {
             "unilateral": bool(self.config.unilateral),
             "mode": self.config.unilateral_mode if self.config.unilateral else "linear",
+            "displacement_bc_x": bool(self.config.displacement_bc_x),
+            "displacement_bc_hard": bool(self.config.displacement_bc_hard),
+            "nondim_kinematics": bool(self.config.nondim_kinematics),
+            "length_ref": 1.0,
             "cg_failures": 0,
             "last_cg_info": 0,
             "outer_iterations": 0,
@@ -166,6 +179,7 @@ class MechanicalEquilibriumSolver:
         x0: np.ndarray,
         sanitize: Callable[[np.ndarray], np.ndarray] | None = None,
         preconditioner: LinearOperator | None = None,
+        solution_abs_limit: float | None = None,
     ) -> tuple[np.ndarray, int, float, int, str, bool, bool]:
         sanitize_fn = sanitize or (lambda v: v)
         x0_eval = sanitize_fn(np.nan_to_num(x0.copy(), nan=0.0, posinf=0.0, neginf=0.0))
@@ -178,7 +192,7 @@ class MechanicalEquilibriumSolver:
             is_finite = bool(np.all(np.isfinite(arr)))
             clipped = False
             if is_finite:
-                limit = float(self.config.solution_abs_limit)
+                limit = float(self.config.solution_abs_limit if solution_abs_limit is None else solution_abs_limit)
                 if np.isfinite(limit) and limit > 0.0:
                     max_abs = float(np.max(np.abs(arr)))
                     if max_abs > limit:
@@ -211,9 +225,25 @@ class MechanicalEquilibriumSolver:
             and cg_finite
             and np.isfinite(rel_cg)
         )
-        cg_ok = (info_cg == 0 or rel_cg <= self.config.accept_rel_residual or cg_incomplete_ok) and cg_finite
+        cg_incomplete_relaxed = (
+            self.config.accept_incomplete_cg
+            and self.config.accept_incomplete_without_residual
+            and info_cg > 0
+            and cg_finite
+        )
+        cg_ok = (
+            info_cg == 0
+            or rel_cg <= self.config.accept_rel_residual
+            or cg_incomplete_ok
+            or cg_incomplete_relaxed
+        ) and cg_finite
         if cg_ok:
-            method = "cg_incomplete" if cg_incomplete_ok and info_cg != 0 else "cg"
+            if cg_incomplete_ok and info_cg != 0:
+                method = "cg_incomplete"
+            elif cg_incomplete_relaxed and info_cg != 0:
+                method = "cg_incomplete_relaxed"
+            else:
+                method = "cg"
             if cg_clipped:
                 method = f"{method}_clip"
             return x_cg_eval, int(info_cg), float(rel_cg), warn_count, method, True, cg_clipped
@@ -245,9 +275,10 @@ class MechanicalEquilibriumSolver:
 
         return x0_eval.copy(), int(info_cg), float(rel_cg), warn_count, "hold", False, False
 
-    def _build_preconditioner(self, g_mask: Array) -> LinearOperator | None:
+    def _build_preconditioner(self, g_mask: Array, spacing: Tuple[float, ...] | None = None) -> LinearOperator | None:
         if self.config.preconditioner != "jacobi":
             return None
+        spacing_use = spacing if spacing is not None else self.spacing
         g = np.asarray(g_mask[..., 0, 0], dtype=float)
         g = np.clip(g, self.config.preconditioner_g_min, 1.0)
         cdiag = np.stack(
@@ -257,7 +288,7 @@ class MechanicalEquilibriumSolver:
         cdiag = np.nan_to_num(cdiag, nan=1.0, posinf=1.0, neginf=1.0)
         floor = max(float(self.config.preconditioner_floor), 1e-12)
         lap_coeff = 0.0
-        for dx in self.spacing:
+        for dx in spacing_use:
             lap_coeff += 2.0 / max(float(dx) * float(dx), 1e-12)
         diag = float(self.config.regularization) + lap_coeff * g[..., None] * np.maximum(cdiag, floor)
         diag = np.maximum(np.nan_to_num(diag, nan=floor, posinf=floor, neginf=floor), floor)
@@ -331,6 +362,21 @@ class MechanicalEquilibriumSolver:
         macro_strain: Tuple[float, float, float],
         plastic_strain: Array | None = None,
     ) -> Tuple[Array, Array, Array]:
+        use_nondim_kin = bool(self.config.nondim_kinematics)
+        length_ref = 1.0
+        if use_nondim_kin:
+            positive_spacings = [float(s) for s in self.spacing if np.isfinite(float(s)) and float(s) > 0.0]
+            if positive_spacings:
+                length_ref = min(positive_spacings)
+                if (not np.isfinite(length_ref)) or length_ref <= 0.0:
+                    length_ref = 1.0
+                    use_nondim_kin = False
+            else:
+                use_nondim_kin = False
+        spacing_solve = tuple(float(s) / length_ref for s in self.spacing) if use_nondim_kin else self.spacing
+        # Keep numerical regularization/penalty consistent with scaled divergence operator.
+        equil_scale = float(length_ref) if use_nondim_kin else 1.0
+        displacement_scale = float(length_ref) if use_nondim_kin else 1.0
         # Use quadratic degradation consistent with energy; use fracture_k as residual stiffness
         k_res = self.fracture_k
         g_mask = ((1.0 - crack) ** 2 + k_res)[..., None, None]
@@ -340,7 +386,29 @@ class MechanicalEquilibriumSolver:
         if plastic_strain is None:
             plastic_strain = np.zeros_like(macro)
         displacement = np.nan_to_num(displacement, nan=0.0, posinf=0.0, neginf=0.0)
+        if use_nondim_kin:
+            displacement = displacement / displacement_scale
         plastic_strain = np.nan_to_num(plastic_strain, nan=0.0, posinf=0.0, neginf=0.0)
+        use_disp_bc = bool(self.config.displacement_bc_x) and (not self.grid.periodic[0])
+        use_hard_bc = use_disp_bc and bool(self.config.displacement_bc_hard)
+        disp_bc_penalty = max(float(self.config.displacement_bc_penalty), 0.0)
+        bc_mask_u = np.zeros(crack.shape + (3,), dtype=float)
+        bc_target = np.zeros(crack.shape + (3,), dtype=float)
+        if use_disp_bc:
+            lx = spacing_solve[0] * max(int(self.grid.shape[0]) - 1, 1)
+            ux_right = float(macro_strain[0]) * lx
+            bc_mask_u[0, :, :, 0] = 1.0
+            bc_mask_u[-1, :, :, 0] = 1.0
+            bc_target[-1, :, :, 0] = ux_right
+            if self.config.displacement_bc_anchor_lateral:
+                # Anchor lateral rigid modes on the whole x=0 face for better stability.
+                bc_mask_u[0, :, :, 1] = 1.0
+                bc_mask_u[0, :, :, 2] = 1.0
+                bc_target[0, :, :, 1] = 0.0
+                bc_target[0, :, :, 2] = 0.0
+        macro_eff = np.zeros_like(macro) if use_disp_bc else macro
+        bc_mask_flat = (bc_mask_u.reshape(-1) > 0.5) if use_disp_bc else np.zeros(self.num_dofs, dtype=bool)
+        bc_target_flat = bc_target.reshape(-1) if use_disp_bc else np.zeros(self.num_dofs, dtype=float)
         cg_failures = 0
         last_cg_info = 0
         outer_iterations = 0
@@ -352,38 +420,66 @@ class MechanicalEquilibriumSolver:
         accepted = True
         rel_residual = 0.0
         gmres_fallback_used = False
-        preconditioner = self._build_preconditioner(g_mask)
+        preconditioner = self._build_preconditioner(g_mask, spacing=spacing_solve)
         solution_clipped = False
+        solution_abs_limit_solve = (
+            float(self.config.solution_abs_limit) / displacement_scale
+            if use_nondim_kin and np.isfinite(float(self.config.solution_abs_limit))
+            else float(self.config.solution_abs_limit)
+        )
 
         if not self.config.unilateral:
             def sanitize_solution(vec: np.ndarray) -> np.ndarray:
                 arr = vec.reshape(crack.shape + (3,))
-                arr = self._remove_rigid_translation(arr)
+                if not use_disp_bc:
+                    arr = self._remove_rigid_translation(arr)
                 return arr.reshape(-1)
 
             def matvec(vec: np.ndarray) -> np.ndarray:
                 vec = np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0)
                 u_loc = vec.reshape(crack.shape + (3,))
-                strain = sym_grad(u_loc, self.spacing, self.grid.periodic)
+                strain = sym_grad(u_loc, spacing_solve, self.grid.periodic)
                 strain_eff = np.nan_to_num(strain - plastic_strain, nan=0.0, posinf=0.0, neginf=0.0)
                 stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_eff, optimize=True)
                 stress *= g_mask
-                divsigma = divergence(stress, self.spacing, self.grid.periodic)
+                divsigma = divergence(stress, spacing_solve, self.grid.periodic)
                 if self.config.regularization > 0.0:
-                    divsigma += self.config.regularization * u_loc
+                    divsigma += (self.config.regularization * equil_scale) * u_loc
+                if use_disp_bc and (not use_hard_bc) and disp_bc_penalty > 0.0:
+                    divsigma += (disp_bc_penalty * equil_scale) * bc_mask_u * u_loc
                 divsigma = np.nan_to_num(divsigma, nan=0.0, posinf=0.0, neginf=0.0)
-                return divsigma.reshape(-1)
+                out = divsigma.reshape(-1)
+                if use_hard_bc:
+                    out[bc_mask_flat] = vec[bc_mask_flat]
+                return out
 
-            rhs_stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, macro - plastic_strain, optimize=True)
+            macro_rhs = macro_eff
+            rhs_stress = np.einsum(
+                "...ijkl,...kl->...ij",
+                self.stiffness,
+                macro_rhs - plastic_strain,
+                optimize=True,
+            )
             rhs_stress *= g_mask
-            rhs_arr = -divergence(rhs_stress, self.spacing, self.grid.periodic)
+            rhs_arr = -divergence(rhs_stress, spacing_solve, self.grid.periodic)
+            if use_disp_bc and (not use_hard_bc) and disp_bc_penalty > 0.0:
+                rhs_arr += (disp_bc_penalty * equil_scale) * bc_mask_u * bc_target
             rhs = np.nan_to_num(rhs_arr, nan=0.0, posinf=0.0, neginf=0.0).reshape(-1)
+            if use_hard_bc:
+                rhs[bc_mask_flat] = bc_target_flat[bc_mask_flat]
             linop = LinearOperator((self.num_dofs, self.num_dofs), matvec)
             u0 = displacement.reshape(-1)
+            if use_hard_bc:
+                u0[bc_mask_flat] = bc_target_flat[bc_mask_flat]
             rhs_norm = float(np.linalg.norm(rhs))
             max_rhs_norm = max(max_rhs_norm, rhs_norm)
             solution, info, rel_residual, warn_n, solver_used, accepted, clipped = self._iterative_solve(
-                linop, rhs, u0, sanitize=sanitize_solution, preconditioner=preconditioner
+                linop,
+                rhs,
+                u0,
+                sanitize=sanitize_solution,
+                preconditioner=preconditioner,
+                solution_abs_limit=solution_abs_limit_solve,
             )
             solution_clipped = bool(clipped)
             runtime_warning_count += int(warn_n)
@@ -393,17 +489,26 @@ class MechanicalEquilibriumSolver:
                 cg_failures += 1
             outer_iterations = 1
             outer_converged = bool(accepted)
-            u = self._remove_rigid_translation(solution.reshape(crack.shape + (3,)))
+            u = solution.reshape(crack.shape + (3,))
+            if not use_disp_bc:
+                u = self._remove_rigid_translation(u)
         else:
             u = displacement.copy()
+            if use_disp_bc:
+                u[..., 0] = 0.0
+                u[-1, :, :, 0] = bc_target[-1, :, :, 0]
+                if self.config.displacement_bc_anchor_lateral:
+                    u[0, :, :, 1] = 0.0
+                    u[0, :, :, 2] = 0.0
             outer_converged = False
             def sanitize_solution(vec: np.ndarray) -> np.ndarray:
                 arr = vec.reshape(crack.shape + (3,))
-                arr = self._remove_rigid_translation(arr)
+                if not use_disp_bc:
+                    arr = self._remove_rigid_translation(arr)
                 return arr.reshape(-1)
             for outer_idx in range(self.config.outer_max_iters):
                 outer_iterations = outer_idx + 1
-                strain_total = sym_grad(u, self.spacing, self.grid.periodic) + macro
+                strain_total = sym_grad(u, spacing_solve, self.grid.periodic) + macro_eff
                 strain_eff = np.nan_to_num(
                     strain_total - plastic_strain,
                     nan=0.0,
@@ -426,36 +531,53 @@ class MechanicalEquilibriumSolver:
                     raise ValueError(f"Unknown unilateral_mode: {self.config.unilateral_mode}")
 
                 def _build_rhs() -> Array:
-                    strain_eff_macro = macro - plastic_strain
+                    strain_eff_macro = macro_eff - plastic_strain
                     strain_macro_pos = project_positive(strain_eff_macro)
                     strain_macro_neg = strain_eff_macro - strain_macro_pos
                     stress_rhs = g_mask * np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_macro_pos, optimize=True)
                     stress_rhs += np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_macro_neg, optimize=True)
-                    rhs_arr = -divergence(stress_rhs, self.spacing, self.grid.periodic)
-                    return np.nan_to_num(rhs_arr, nan=0.0, posinf=0.0, neginf=0.0).reshape(-1)
+                    rhs_arr = -divergence(stress_rhs, spacing_solve, self.grid.periodic)
+                    if use_disp_bc and (not use_hard_bc) and disp_bc_penalty > 0.0:
+                        rhs_arr += (disp_bc_penalty * equil_scale) * bc_mask_u * bc_target
+                    rhs_flat = np.nan_to_num(rhs_arr, nan=0.0, posinf=0.0, neginf=0.0).reshape(-1)
+                    if use_hard_bc:
+                        rhs_flat[bc_mask_flat] = bc_target_flat[bc_mask_flat]
+                    return rhs_flat
 
                 def matvec(vec: np.ndarray) -> np.ndarray:
                     vec = np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0)
                     u_loc = vec.reshape(crack.shape + (3,))
-                    strain = sym_grad(u_loc, self.spacing, self.grid.periodic)
+                    strain = sym_grad(u_loc, spacing_solve, self.grid.periodic)
                     strain_eff_loc = np.nan_to_num(strain - plastic_strain, nan=0.0, posinf=0.0, neginf=0.0)
                     strain_pos = project_positive(strain_eff_loc)
                     strain_neg = strain_eff_loc - strain_pos
                     stress = g_mask * np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_pos, optimize=True)
                     stress += np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_neg, optimize=True)
-                    divsigma = divergence(stress, self.spacing, self.grid.periodic)
+                    divsigma = divergence(stress, spacing_solve, self.grid.periodic)
                     if self.config.regularization > 0.0:
-                        divsigma += self.config.regularization * u_loc
+                        divsigma += (self.config.regularization * equil_scale) * u_loc
+                    if use_disp_bc and (not use_hard_bc) and disp_bc_penalty > 0.0:
+                        divsigma += (disp_bc_penalty * equil_scale) * bc_mask_u * u_loc
                     divsigma = np.nan_to_num(divsigma, nan=0.0, posinf=0.0, neginf=0.0)
-                    return divsigma.reshape(-1)
+                    out = divsigma.reshape(-1)
+                    if use_hard_bc:
+                        out[bc_mask_flat] = vec[bc_mask_flat]
+                    return out
 
                 rhs = _build_rhs()
                 linop = LinearOperator((self.num_dofs, self.num_dofs), matvec)
                 u0 = u.reshape(-1)
+                if use_hard_bc:
+                    u0[bc_mask_flat] = bc_target_flat[bc_mask_flat]
                 rhs_norm = float(np.linalg.norm(rhs))
                 max_rhs_norm = max(max_rhs_norm, rhs_norm)
                 solution, info, rel_residual, warn_n, solver_used, accepted, clipped = self._iterative_solve(
-                    linop, rhs, u0, sanitize=sanitize_solution, preconditioner=preconditioner
+                    linop,
+                    rhs,
+                    u0,
+                    sanitize=sanitize_solution,
+                    preconditioner=preconditioner,
+                    solution_abs_limit=solution_abs_limit_solve,
                 )
                 solution_clipped = solution_clipped or bool(clipped)
                 runtime_warning_count += int(warn_n)
@@ -463,7 +585,9 @@ class MechanicalEquilibriumSolver:
                 last_cg_info = int(info)
                 if not accepted:
                     cg_failures += 1
-                u_new = self._remove_rigid_translation(solution.reshape(crack.shape + (3,)))
+                u_new = solution.reshape(crack.shape + (3,))
+                if not use_disp_bc:
+                    u_new = self._remove_rigid_translation(u_new)
                 if not accepted:
                     rel_change = float("inf")
                     u = u_new
@@ -479,6 +603,10 @@ class MechanicalEquilibriumSolver:
         self.last_solve_info = {
             "unilateral": bool(self.config.unilateral),
             "mode": self.config.unilateral_mode if self.config.unilateral else "linear",
+            "displacement_bc_x": bool(use_disp_bc),
+            "displacement_bc_hard": bool(use_hard_bc),
+            "nondim_kinematics": bool(use_nondim_kin),
+            "length_ref": float(length_ref),
             "cg_failures": int(cg_failures),
             "last_cg_info": int(last_cg_info),
             "outer_iterations": int(outer_iterations),
@@ -494,7 +622,7 @@ class MechanicalEquilibriumSolver:
             "solution_clipped": bool(solution_clipped),
         }
 
-        total_strain = sym_grad(u, self.spacing, self.grid.periodic) + macro
+        total_strain = sym_grad(u, spacing_solve, self.grid.periodic) + macro_eff
         strain_eff = total_strain - plastic_strain
         if self.config.unilateral:
             if self.config.unilateral_mode == "spectral":
@@ -509,7 +637,8 @@ class MechanicalEquilibriumSolver:
         else:
             stress = np.einsum("...ijkl,...kl->...ij", self.stiffness, strain_eff, optimize=True)
             stress *= g_mask
-        return u, total_strain, stress
+        displacement_out = u * displacement_scale if use_nondim_kin else u
+        return displacement_out, total_strain, stress
 
 
 __all__ = ["MechanicalEquilibriumSolver", "MechanicalConfig"]

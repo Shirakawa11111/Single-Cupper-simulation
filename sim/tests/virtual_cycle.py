@@ -74,6 +74,7 @@ class CycleResult:
 def run_virtual_cycles(
     cycles: int = 3,               # 建议调试时先跑 1-2 个周期
     max_strain: float = 0.02,      # 拉伸峰值（低应力/屈服平台场景）
+    max_strain_schedule: tuple[float, ...] | list[float] | None = None,  # 分级续算应变幅（按周期覆盖 max_strain）
     min_strain: float | None = None,  # 若为 None，使用对称 -max_strain
     segment_steps: int = 50,       # 每个子段（0->峰值）步数
     print_interval: int = 5,       # 进度打印间隔（步）
@@ -90,6 +91,8 @@ def run_virtual_cycles(
     pre_relax_steps: int = 0,           # 可选：载荷前的短暂预演化步数，形成更清晰的缺陷/滑移带
     pre_relax_strain: float = 0.0,      # 预演化时施加的宏观应变（通常为 0）
     notch_box: tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None = None,  # 可选：在区域内预置裂纹/notch
+    arc_notch: dict | None = None,      # 可选：圆弧切口配置（圆心可在试样外）
+    arc_notch_min_cells_x: int = 2,     # 弧形切口 x 向最小可解析网格数（过窄会自动扩展）
     notch_crack_value: float = 0.6,     # notch 区域内的初始裂纹值
     stress_mu_weight: float = 0.5,      # von Mises 应力归一化后乘此系数作为 μ_extra，<=0 则关闭
     crack_relax: float = 0.05,          # 裂纹松弛系数（默认较高便于萌生）
@@ -102,6 +105,11 @@ def run_virtual_cycles(
     crack_accept_incomplete: bool | None = None, # 裂纹 CG 是否接受 incomplete 结果
     dir_coupling: float = 1.0,          # 方向性增益
     plastic_relax: float = 0.075,       # 塑性松弛；与 PFCCoupling.flow_scale 共同控制屈服后软化速度
+    coupling_inner_iters: int = 3,      # 机械-塑性增量内固定点迭代次数
+    coupling_min_iters: int = 1,        # 最小内迭代次数
+    coupling_tol: float = 5e-4,         # 塑性张量内迭代收敛阈值
+    coupling_stress_tol: float = 5e-4,  # 应力内迭代收敛阈值
+    post_crack_mech_correction: bool = True,  # 裂纹更新后再做一次力学校正
     poisson_ratio: float = 0.34,        # 泊松比，用于宏观应变的侧向收缩
     toughness_scale: float = 0.1,       # 韧性缩放因子 (<1 降低 Gc 促开裂；>1 提高韧性)
     stress_strain_csv: Path | None = None,  # 可选：逐步输出宏观应力-应变曲线
@@ -109,6 +117,7 @@ def run_virtual_cycles(
     crack_length_x0: float | None = None,   # 裂纹尖端参考点（None=自动）
     crack_length_axis: int = 0,             # 裂纹长度统计轴
     cycle_points: int | None = None,        # 每个完整循环的离散点数（覆盖 segment_steps）
+    max_strain_step: float | None = None,   # 单步应变增量上限（用于大应变幅稳定积分）
     orientation_vector: tuple[float, float, float] = (1.0, 1.0, 1.0),  # 单晶取向，默认 [111]
     random_seed: int = 42,                  # 随机种子（结构噪声/缺陷播种与初始化）
     grid_shape: tuple[int, int, int] | None = None,
@@ -125,7 +134,13 @@ def run_virtual_cycles(
     gamma0: float | None = None,            # 覆盖滑移剪切速率系数
     slip_exponent: float | None = None,     # 覆盖滑移指数 n
     h_iso: float | None = None,             # 覆盖各向同性硬化
+    yield_tau_inf: float | None = None,     # 覆盖饱和 CRSS（Voce tau_inf, nd）
+    h0_iso: float | None = None,            # 覆盖 Voce 初始硬化模量 h0（nd）
     h_gnd: float | None = None,             # 覆盖 GND 硬化项
+    kin_c: float | None = None,             # 覆盖运动硬化 C（Armstrong-Frederick）
+    kin_d: float | None = None,             # 覆盖运动硬化 D（Armstrong-Frederick）
+    kin_c2: float | None = None,            # 覆盖第二背应力 C2（双背应力）
+    kin_d2: float | None = None,            # 覆盖第二背应力 D2（双背应力）
     c11: float | None = None,               # 覆盖铜 c11（无量纲）
     c12: float | None = None,               # 覆盖铜 c12（无量纲）
     c44: float | None = None,               # 覆盖铜 c44（无量纲）
@@ -136,15 +151,22 @@ def run_virtual_cycles(
     mech_regularization: float | None = None, # 机械求解线性正则
     mech_accept_rel_residual: float | None = None, # 迭代残差验收阈值
     mech_accept_incomplete_cg: bool | None = None, # 是否接受 info>0 的有限 CG 解
+    mech_accept_incomplete_without_residual: bool | None = None, # 是否接受 residual 非有限的 incomplete CG 解
     mech_enable_gmres_fallback: bool | None = None, # 是否启用 GMRES 回退
     mech_gmres_restart: int | None = None,  # GMRES restart
     mech_gmres_maxiter: int | None = None,  # GMRES maxiter
     mech_solution_abs_limit: float | None = None, # 迭代解绝对值上限
     mech_clip_solution_on_limit: bool | None = None, # 解幅值超限时是否裁剪而非拒收
+    mech_unilateral: bool | None = None,    # 是否启用单向分裂（False=线性力学）
     mech_unilateral_mode: str | None = None,  # 单向分裂模式: spectral/volumetric
     mech_preconditioner: str | None = None,  # 机械线性求解预条件: none/jacobi
     mech_preconditioner_floor: float | None = None,  # Jacobi 对角下限
     mech_preconditioner_g_min: float | None = None,  # Jacobi 裂纹退化下限
+    mech_displacement_bc_x: bool | None = None,  # X 向位移边界驱动（x=0/L）
+    mech_displacement_bc_penalty: float | None = None,  # 位移边界惩罚系数
+    mech_displacement_bc_anchor_lateral: bool | None = None,  # 锚定一个节点的 y/z 消除刚体模态
+    mech_displacement_bc_hard: bool | None = None,  # 以强约束方式施加位移边界（非罚函数）
+    mech_nondim_kinematics: bool | None = None,  # 力学坐标/位移无量纲一致化（改善条件数）
     run_dir: Path | None = None,            # 输出根目录（默认按日期/任务自动生成）
     task: str = "virtual_cycle",            # 任务标签（用于命名输出目录）
     auto_output: bool = False,              # 若 True 且 run_dir 提供/默认，则自动填充输出文件
@@ -155,6 +177,7 @@ def run_virtual_cycles(
     gnd_active: bool = False,               # 是否输出 GND 诊断
     gnd_burgers: float = 1.0,               # Burgers 向量尺度（无量纲）
     diagnostics_out: dict[str, float | int | bool] | None = None,  # 可选：回填数值稳定诊断
+    state_out: dict[str, np.ndarray] | None = None,  # 可选：导出最终场状态（用于后处理）
 ) -> Tuple[List[CycleResult], float, float]:
     
     # 1. 输出目录解析
@@ -220,8 +243,20 @@ def run_virtual_cycles(
         coupling_kwargs["slip_exponent"] = slip_exponent
     if h_iso is not None:
         coupling_kwargs["h_iso"] = h_iso
+    if yield_tau_inf is not None:
+        coupling_kwargs["yield_tau_inf"] = yield_tau_inf
+    if h0_iso is not None:
+        coupling_kwargs["h0_iso"] = h0_iso
     if h_gnd is not None:
         coupling_kwargs["h_gnd"] = h_gnd
+    if kin_c is not None:
+        coupling_kwargs["kin_c"] = kin_c
+    if kin_d is not None:
+        coupling_kwargs["kin_d"] = kin_d
+    if kin_c2 is not None:
+        coupling_kwargs["kin_c2"] = kin_c2
+    if kin_d2 is not None:
+        coupling_kwargs["kin_d2"] = kin_d2
     coupling = PFCCoupling(pfc_params, fracture, mode="density", **coupling_kwargs)
     energy = FreeEnergy(copper, fracture, coupling)
     
@@ -240,6 +275,8 @@ def run_virtual_cycles(
         mech_cfg.accept_rel_residual = mech_accept_rel_residual
     if mech_accept_incomplete_cg is not None:
         mech_cfg.accept_incomplete_cg = mech_accept_incomplete_cg
+    if mech_accept_incomplete_without_residual is not None:
+        mech_cfg.accept_incomplete_without_residual = mech_accept_incomplete_without_residual
     if mech_enable_gmres_fallback is not None:
         mech_cfg.enable_gmres_fallback = mech_enable_gmres_fallback
     if mech_gmres_restart is not None:
@@ -250,6 +287,8 @@ def run_virtual_cycles(
         mech_cfg.solution_abs_limit = mech_solution_abs_limit
     if mech_clip_solution_on_limit is not None:
         mech_cfg.clip_solution_on_limit = mech_clip_solution_on_limit
+    if mech_unilateral is not None:
+        mech_cfg.unilateral = bool(mech_unilateral)
     if mech_unilateral_mode is not None:
         if mech_unilateral_mode not in ("spectral", "volumetric"):
             raise ValueError("mech_unilateral_mode must be 'spectral' or 'volumetric'.")
@@ -262,6 +301,16 @@ def run_virtual_cycles(
         mech_cfg.preconditioner_floor = mech_preconditioner_floor
     if mech_preconditioner_g_min is not None:
         mech_cfg.preconditioner_g_min = mech_preconditioner_g_min
+    if mech_displacement_bc_x is not None:
+        mech_cfg.displacement_bc_x = bool(mech_displacement_bc_x)
+    if mech_displacement_bc_penalty is not None:
+        mech_cfg.displacement_bc_penalty = float(mech_displacement_bc_penalty)
+    if mech_displacement_bc_anchor_lateral is not None:
+        mech_cfg.displacement_bc_anchor_lateral = bool(mech_displacement_bc_anchor_lateral)
+    if mech_displacement_bc_hard is not None:
+        mech_cfg.displacement_bc_hard = bool(mech_displacement_bc_hard)
+    if mech_nondim_kinematics is not None:
+        mech_cfg.nondim_kinematics = bool(mech_nondim_kinematics)
 
     builder = Cu111StructureBuilder(
         grid,
@@ -283,6 +332,80 @@ def run_virtual_cycles(
         X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
         mask = (X >= x0) & (X <= x1) & (Y >= y0) & (Y <= y1) & (Z >= z0) & (Z <= z1)
         structure.fields["crack"][mask] = np.clip(notch_crack_value, 0.0, 1.0)
+    if arc_notch is not None:
+        if not isinstance(arc_notch, dict):
+            raise ValueError("arc_notch must be a mapping when provided.")
+        dx, dy, dz = grid.spacing
+        nx, ny, nz = grid.shape
+        xs = np.linspace(0, dx * (nx - 1), nx)
+        ys = np.linspace(0, dy * (ny - 1), ny)
+        zs = np.linspace(0, dz * (nz - 1), nz)
+        X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+
+        center = arc_notch.get("center", [0.5 * dx * (nx - 1), dy * ny])
+        if not isinstance(center, (list, tuple)) or len(center) != 2:
+            raise ValueError("arc_notch.center must be [x_center, y_center].")
+        cx, cy = float(center[0]), float(center[1])
+        radius = float(arc_notch.get("radius", min(dx * (nx - 1), dy * (ny - 1)) * 0.5))
+        if radius <= 0.0:
+            raise ValueError("arc_notch.radius must be > 0.")
+        surface = str(arc_notch.get("surface", "y_max"))
+        crack_val = float(arc_notch.get("crack_value", notch_crack_value))
+        z_range = arc_notch.get("z_range", None)
+        x_range = arc_notch.get("x_range", None)
+
+        if surface == "y_max":
+            rad2 = radius * radius - (X - cx) ** 2
+            valid = rad2 >= 0.0
+            y_arc = cy - np.sqrt(np.clip(rad2, 0.0, None))
+            y_top = dy * (ny - 1)
+            mask = valid & (Y >= y_arc) & (Y <= y_top + 1e-12)
+        elif surface == "y_min":
+            rad2 = radius * radius - (X - cx) ** 2
+            valid = rad2 >= 0.0
+            y_arc = cy + np.sqrt(np.clip(rad2, 0.0, None))
+            y_bot = 0.0
+            mask = valid & (Y <= y_arc) & (Y >= y_bot - 1e-12)
+        else:
+            raise ValueError("arc_notch.surface must be 'y_max' or 'y_min'.")
+
+        if isinstance(z_range, (list, tuple)) and len(z_range) == 2:
+            z0, z1 = float(z_range[0]), float(z_range[1])
+            mask &= (Z >= min(z0, z1)) & (Z <= max(z0, z1))
+        if isinstance(x_range, (list, tuple)) and len(x_range) == 2:
+            x0, x1 = float(x_range[0]), float(x_range[1])
+            x0, x1 = min(x0, x1), max(x0, x1)
+            min_cells_cfg = arc_notch.get("min_cells_x", arc_notch_min_cells_x)
+            min_cells = max(1, int(min_cells_cfg))
+            min_width = float(min_cells) * dx
+            width = x1 - x0
+            if width + 1e-15 < min_width:
+                xc = 0.5 * (x0 + x1)
+                half = 0.5 * min_width
+                x_min_domain = 0.0
+                x_max_domain = dx * (nx - 1)
+                x0 = max(x_min_domain, xc - half)
+                x1 = min(x_max_domain, xc + half)
+                if (x1 - x0) + 1e-15 < min_width:
+                    if x0 <= x_min_domain + 1e-12:
+                        x1 = min(x_max_domain, x_min_domain + min_width)
+                    else:
+                        x0 = max(x_min_domain, x_max_domain - min_width)
+                x0, x1 = min(x0, x1), max(x0, x1)
+                print(
+                    f"[notch] arc_notch.x_range expanded to resolvable width: "
+                    f"cells>={min_cells}, dx={dx:.3e}, x_range=[{x0:.3e}, {x1:.3e}]"
+                )
+            mask &= (X >= min(x0, x1)) & (X <= max(x0, x1))
+
+        masked_pts = int(np.count_nonzero(mask))
+        if masked_pts == 0:
+            print(
+                "[notch] warning: arc_notch produced zero seeded cells. "
+                "Increase radius/x_range or reduce grid spacing."
+            )
+
+        structure.fields["crack"][mask] = np.clip(crack_val, 0.0, 1.0)
     
     mechanical = MechanicalEquilibriumSolver(
         grid, copper, structure.orientation, fracture_k=fracture.k, config=mech_cfg
@@ -333,6 +456,11 @@ def run_virtual_cycles(
                 crack_accept_incomplete if crack_accept_incomplete is not None else True
             ),
             plastic_relax=plastic_relax,
+            coupling_inner_iters=max(1, int(coupling_inner_iters)),
+            coupling_min_iters=max(1, int(coupling_min_iters)),
+            coupling_tol=float(coupling_tol),
+            coupling_stress_tol=float(coupling_stress_tol),
+            post_crack_mech_correction=bool(post_crack_mech_correction),
             mech_plastic_weight=0.9,
             dir_coupling=dir_coupling,
             pfc_active=pfc_active,
@@ -394,6 +522,11 @@ def run_virtual_cycles(
             crack_accept_incomplete if crack_accept_incomplete is not None else True
         ),
         plastic_relax=plastic_relax,
+        coupling_inner_iters=max(1, int(coupling_inner_iters)),
+        coupling_min_iters=max(1, int(coupling_min_iters)),
+        coupling_tol=float(coupling_tol),
+        coupling_stress_tol=float(coupling_stress_tol),
+        post_crack_mech_correction=bool(post_crack_mech_correction),
         mech_plastic_weight=0.9,
         dir_coupling=dir_coupling,
         pfc_active=pfc_active,
@@ -430,6 +563,11 @@ def run_virtual_cycles(
         "mechanical_solution_clipped_steps": 0,
         "mechanical_rel_residual_nonfinite_steps": 0,
         "mechanical_rel_residual_max": 0.0,
+        "coupling_inner_iterations_sum": 0,
+        "coupling_not_converged_steps": 0,
+        "coupling_plastic_residual_max": 0.0,
+        "coupling_stress_residual_max": 0.0,
+        "post_crack_mech_correction_steps": 0,
         "crack_cg_nonconverged_steps": 0,
         "crack_cg_not_accepted_steps": 0,
         "nonfinite_count": 0,
@@ -439,31 +577,53 @@ def run_virtual_cycles(
     }
 
     # 2. 循环加载
-    min_strain = -max_strain if min_strain is None else min_strain
-    load_segments = [max_strain] if monotonic else [max_strain, 0.0, min_strain, 0.0]  # monotonic or triangle
-    if cycle_points is not None:
-        points_per_segment = max(1, int(round(cycle_points / len(load_segments))))
-        if points_per_segment * len(load_segments) != cycle_points:
-            print(
-                f"[warn] cycle_points={cycle_points} not divisible by {len(load_segments)}; "
-                f"using {points_per_segment} per segment -> {points_per_segment * len(load_segments)} points"
-            )
-        segment_steps = points_per_segment
+    schedule_vals: list[float] | None = None
+    if max_strain_schedule is not None:
+        schedule_vals = [float(v) for v in max_strain_schedule if np.isfinite(float(v))]
+        if len(schedule_vals) == 0:
+            schedule_vals = None
+        else:
+            if cycles != len(schedule_vals):
+                print(
+                    f"[info] max_strain_schedule length={len(schedule_vals)} overrides cycles={cycles} "
+                    f"-> cycles={len(schedule_vals)}"
+                )
+                cycles = len(schedule_vals)
 
 
     print_every = max(1, int(print_interval)) if print_interval is not None else 0
     vtk_every = max(1, int(vtk_interval)) if vtk_interval is not None else 0
     for cycle in range(1, cycles + 1):
+        max_strain_cycle = float(schedule_vals[cycle - 1]) if schedule_vals is not None else float(max_strain)
+        min_strain_cycle = -max_strain_cycle if min_strain is None else float(min_strain)
+        load_segments = [max_strain_cycle] if monotonic else [max_strain_cycle, 0.0, min_strain_cycle, 0.0]
+        if cycle_points is not None:
+            points_per_segment = max(1, int(round(cycle_points / len(load_segments))))
+            if points_per_segment * len(load_segments) != cycle_points:
+                print(
+                    f"[warn] cycle_points={cycle_points} not divisible by {len(load_segments)}; "
+                    f"using {points_per_segment} per segment -> {points_per_segment * len(load_segments)} points"
+                )
+            segment_steps = points_per_segment
         print(f"=== Starting Cycle {cycle} ===")
+        if schedule_vals is not None:
+            print(f"  [schedule] max_strain_cycle={max_strain_cycle:.6f}")
         energy_val = 0.0
         plastic_min, plastic_max = np.inf, -np.inf
         cycle_rss_peak = -np.inf
+        cycle_rss_peak_signed = 0.0
         
         for target in load_segments:
             target_start = current_strain
             target_end = target
-            for step in range(1, segment_steps + 1):
-                alpha = step / segment_steps
+            local_steps = int(segment_steps)
+            if max_strain_step is not None:
+                step_cap = float(max_strain_step)
+                if np.isfinite(step_cap) and step_cap > 0.0:
+                    needed = int(np.ceil(abs(target_end - target_start) / step_cap))
+                    local_steps = max(local_steps, max(1, needed))
+            for step in range(1, local_steps + 1):
+                alpha = step / local_steps
                 current_strain = target_start + (target_end - target_start) * alpha
                 macro = (current_strain, -poisson_ratio * current_strain, -poisson_ratio * current_strain)
                 energy_val = solver.step(macro)
@@ -496,6 +656,21 @@ def run_virtual_cycles(
                         float(solver_diag["mechanical_rel_residual_max"]),
                         rel_res,
                     )
+                solver_diag["coupling_inner_iterations_sum"] += int(
+                    step_diag.get("coupling_inner_iterations_used", 0)
+                )
+                if not bool(step_diag.get("coupling_converged", True)):
+                    solver_diag["coupling_not_converged_steps"] += 1
+                solver_diag["coupling_plastic_residual_max"] = max(
+                    float(solver_diag["coupling_plastic_residual_max"]),
+                    float(step_diag.get("coupling_plastic_residual", 0.0)),
+                )
+                solver_diag["coupling_stress_residual_max"] = max(
+                    float(solver_diag["coupling_stress_residual_max"]),
+                    float(step_diag.get("coupling_stress_residual", 0.0)),
+                )
+                if bool(step_diag.get("post_crack_mech_correction_used", False)):
+                    solver_diag["post_crack_mech_correction_steps"] += 1
                 if not bool(step_diag.get("mechanical_outer_converged", True)):
                     solver_diag["mechanical_outer_not_converged_steps"] += 1
                 if int(step_diag.get("crack_cg_info", 0)) != 0:
@@ -527,6 +702,8 @@ def run_virtual_cycles(
                 rss_max, _, _, _, rss_signed_max = coupling.compute_rss(
                     stress_tensor,
                     backstress=solver.state.get("backstress"),
+                    slip_backstress=solver.state.get("chi_s"),
+                    slip_backstress2=solver.state.get("chi_s2"),
                     return_signed_max=True,
                     orientation=structure.orientation,
                 )
@@ -551,7 +728,7 @@ def run_virtual_cycles(
                     last_rel = step_diag.get("mechanical_last_rel_residual", 0.0)
                     last_crack = step_diag.get("crack_cg_info", 0)
                     print(
-                        f"  Cycle {cycle} Substep {step}/{segment_steps} | Strain {current_strain:.4f} | "
+                        f"  Cycle {cycle} Substep {step}/{local_steps} | Strain {current_strain:.4f} | "
                         f"mech={last_mech} rel={last_rel:.2e} crack_info={int(last_crack)}"
                     )
 
@@ -812,6 +989,13 @@ def run_virtual_cycles(
                     solver_diag["mechanical_rel_residual_nonfinite_steps"]
                 ),
                 "mechanical_rel_residual_max": float(solver_diag["mechanical_rel_residual_max"]),
+                "coupling_inner_iterations_avg": float(
+                    solver_diag["coupling_inner_iterations_sum"] / max(int(solver_diag["step_count"]), 1)
+                ),
+                "coupling_not_converged_steps": int(solver_diag["coupling_not_converged_steps"]),
+                "coupling_plastic_residual_max": float(solver_diag["coupling_plastic_residual_max"]),
+                "coupling_stress_residual_max": float(solver_diag["coupling_stress_residual_max"]),
+                "post_crack_mech_correction_steps": int(solver_diag["post_crack_mech_correction_steps"]),
                 "crack_cg_nonconverged_steps": int(solver_diag["crack_cg_nonconverged_steps"]),
                 "crack_cg_not_accepted_steps": int(solver_diag["crack_cg_not_accepted_steps"]),
                 "nonfinite_count": int(solver_diag["nonfinite_count"]),
@@ -820,6 +1004,33 @@ def run_virtual_cycles(
                 "max_abs_displacement": float(solver_diag["max_abs_displacement"]),
             }
         )
+
+    if state_out is not None:
+        state_out.clear()
+        for key in (
+            "crack",
+            "plastic",
+            "plastic_inst",
+            "plastic_vec",
+            "plastic_tensor",
+            "accum_plastic",
+            "backstress",
+            "gamma_s",
+            "chi_s",
+            "chi_s2",
+            "tau_c",
+            "gnd_density",
+            "displacement",
+            "strain",
+            "history",
+            "stress",
+            "stress_vm",
+            "psi",
+        ):
+            value = solver.state.get(key)
+            if value is not None:
+                state_out[key] = np.array(value, copy=True)
+        state_out["orientation"] = np.array(structure.orientation, copy=True)
 
     return results, paris_coeff, coffman
 
