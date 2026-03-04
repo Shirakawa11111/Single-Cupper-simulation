@@ -19,6 +19,9 @@ pip install -r requirements-dev.txt
 - `sim/solver.py`：交替求解器（力学 → 塑性松弛 → 裂纹 → PFC），支持方向性驱动、应力耦合 μ_extra，跟踪 stress/stress_vm、plastic_vec。
 - `sim/io.py`：LAMMPS/VTK 输出（VTK 现为二进制 STRUCTURED_GRID，可选变形坐标），输出 accum_plastic/plastic_inst/方向分量与归一化场。
 - `sim/tests/virtual_cycle.py`：虚拟循环载荷驱动脚本（对称三角波），记录 CSV/标准疲劳指标 CSV、VTK、LAMMPS，拟合 Paris/Coffin–Manson 斜率。
+- `sim/tests/run_virtual_cycle_config.py`：YAML 配置化入口，输出运行摘要与稳定性诊断（包含机械/裂纹求解器统计）。
+- `sim/tests/run_coupled_validation_bundle.py`：单次验证打包（GROD、Σa-cum、裂纹/塑性图、滑移系表格）。
+- `sim/tests/run_multi_amplitude_validation_pack.py`：多总应变幅（如 0.2/0.4/0.6/0.8%）批量验证。
 - `sim/tests/regress_microstrain.py`：微应变线弹性回归（σ–ε 比值与塑性漂移）。
 - `sim/tests/regress_gnd.py`：GND/Nye 回归（滑移梯度驱动下 ρ_GND 线性响应检查）。
 - `sim/tests/regress_gnd_cycle.py`：低幅循环 GND 增长回归（输出 gnd_density_mean/Σ|γ_s| 趋势与参数快照）。
@@ -195,6 +198,48 @@ python sim/tests/sweep_crack_onset_doe.py \
 - PFC 更新：引入线性半隐式 FFT 步（默认），显著放宽 dt 稳定性。
 - 输出：VTK 改为二进制 STRUCTURED_GRID，附归一化场；LAMMPS/VTK 统一使用 accum_plastic 与 plastic_inst。
 - 报告：`report.tex` 同步上述公式/流程/输出说明，添加当前结果快照。
+
+### 2026-03-04 稳定化更新（v5 系列）
+- `sim/solver.py`：修复“机械步 rejected 但仍推进状态”的问题。现在当机械解 `accepted=false` 时，不再提交塑性/裂纹/PFC 更新，避免坏步污染状态。
+- `sim/tests/virtual_cycle.py`：新增自适应子步重试（`adaptive_substep_retry`、`adaptive_substep_max_splits`、`adaptive_substep_min_increment`），拒绝步自动二分；若最小步长仍失败则安全停止。
+- `sim/tests/run_coupled_validation_bundle.py`：`Sigma_a` 优先由 `sig_xx_nd * stress_ref_gpa` 重构，避免 `sig_xx_GPa` 列单位混用导致的量纲错误；summary 新增 `crack_mean_t1` 等关键字段。
+- `sim/tests/run_virtual_cycle_config.py`：修复 `schmid_*` 后处理参数误传给 `run_virtual_cycles()` 的问题。
+- 新增配置：
+  - `sim/configs/fatigue_lowamp_align_locked_v5_hard_sat_coupled_arc_macro500um_nonclip_hardbc_v2_adaptive.yaml`
+  - `sim/configs/fatigue_lowamp_align_locked_v5_hard_sat_coupled_arc_macro500um_nonclip_mid_v4_adaptive.yaml`
+- 经验结论：在当前 500 µm 几何与初始缺口设置下，`hard BC + non-clip` 可能在首周期出现连续 reject（无完整周期输出），建议先用 `nonclip_mid_v4_adaptive` 做批量验证，再逐步收紧到 `hardbc_v2_adaptive`。
+
+### 推荐复现实验入口（当前）
+单幅值验证包（示例 0.4%）：
+```bash
+python sim/tests/run_coupled_validation_bundle.py \
+  --config sim/configs/fatigue_lowamp_align_locked_v5_hard_sat_coupled_arc_macro500um_nonclip_mid_v4_adaptive.yaml \
+  --out-dir docs/exp_compare_cycle_1000/dev_mid_v4_adaptive_amp0p4 \
+  --cycles 4 \
+  --cycle-points 48
+```
+
+多幅值批量（0.2/0.4/0.6/0.8%）：
+```bash
+python sim/tests/run_multi_amplitude_validation_pack.py \
+  --base-config sim/configs/fatigue_lowamp_align_locked_v5_hard_sat_coupled_arc_macro500um_nonclip_mid_v4_adaptive.yaml \
+  --amplitudes 0.2,0.4,0.6,0.8 \
+  --cycles 6 \
+  --cycle-points 48 \
+  --out-root docs/exp_compare_cycle_1000/micro_scale_validation_0p2_0p8_v4_adaptive
+```
+
+### 2026-03-04 可视化单位约定（微米尺度）
+- GROD 图：色标单位固定为 `°`（取向失配角）。
+- `validation_sigma_a_vs_cum.png`：纵轴 `Sigma_a` 单位为 `MPa`，由 `sig_xx_nd * stress_ref_gpa * 1000` 重构。
+- `gamma`（剪应变）为无量纲。
+- 二维场图 X/Y 坐标单位会根据网格步长自动选择（`µm`/`mm`/`m`），当前 `macro500um` 配置默认显示 `µm`。
+
+### 2026-03-04 当前已知现象与排查建议
+- 若 GROD 几乎纯色（接近 0 或低对比），优先检查 `run_summary.json` 里的 `mechanical_not_accepted_steps` 与 `adaptive_split_failed_steps` 是否偏高；拒绝步过多会抑制状态演化。
+- 若缺口视觉上“过宽”，优先检查 `arc_notch.x_range`、`arc_notch.radius` 与 `arc_notch_min_cells_x`；当 x 向宽度低于最小可解析网格数时，程序会自动扩宽以保证可解析。
+- 若出现 `No cycle results produced`，说明当前边界/步长组合在首周期未通过力学接受判据，建议先用 `nonclip_mid_v4_adaptive`，再逐步收紧到 `hardbc_v2_adaptive`。
+- 做“非裁剪稳定化”对比时，建议同时保留 `validation_grod_t1.png` 与 `validation_bundle_summary.json`，避免仅凭单图判断。
 
 ## 当前结果快照（默认参数：128×64×16，缺陷幅值 0.12，ε_max=0.08，dir_coupling=0.8）
 - 裂纹：最高 ~0.034，轻微均匀损伤，未贯穿。
