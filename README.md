@@ -553,3 +553,36 @@ python sim/tests/regress_bc_crack_micron.py --strict --output /tmp/regress_micro
 - 对 D3 负对照集合增加“中等驱动/不同晶向”子集，进一步验证“不过触发”稳健性。
 - 增加长周期（>10 cycles）能量密度与裂纹局部化联合回归，补齐“时间尺度外推”证据链。
 - 将 release 产物摘要自动写入统一 markdown（当前已有 `bundle_summary.json`，建议补标准化周报模板落盘）。
+
+## Priority-4 四步流程（2026-03-04 最新执行）
+
+### 执行命令
+```bash
+python sim/tests/run_priority4_pipeline.py \
+  --base-config sim/configs/fatigue_lowamp_align_locked_v5_hard_sat_coupled_arc_macro500um_displacement_bc_probe.yaml \
+  --cycles 2 \
+  --cycle-points 16 \
+  --max-candidates 2 \
+  --mesh-factors 0.8,1.0,1.2
+```
+
+### 输出目录
+- 总目录：`docs/exp_compare_cycle_1000/priority4_pipeline_20260304_162810`
+- 总结文件：`docs/exp_compare_cycle_1000/priority4_pipeline_20260304_162810/priority4_pipeline_summary.json`
+- 四步子目录：
+  - `step1_scale_consistency`
+  - `step2_mesh_convergence`
+  - `step3_dual_backstress_calibration`
+  - `step4_unified_validation`
+
+### 四步完成状态
+- Step 1（量纲一致性）：完成
+- Step 2（500 µm 网格收敛）：完成，参考网格 `19x10x5`
+- Step 3（位移边界 + 双背应力标定）：完成，当前最优候选 `bs_moderate`
+- Step 4（0.2/0.4/0.6/0.8% 统一验证包）：完成，四个应变幅均有 GROD/Σa-cum/滑移表输出
+
+### 当前结论（本轮）
+- 本轮可稳定输出四步产物，但物理目标尚未完全达标：
+  - `cycles_completed` 仍偏低（主要为 1-2 周期）
+  - `hardening_ratio` 在本轮为 `NaN`（尚未形成可用于判定“先陡升后饱和”的有效序列）
+- 因此本轮结果可用于流程验证与参数比较，不可直接作为最终“真实疲劳拟合”结论。
