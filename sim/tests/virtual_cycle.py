@@ -28,9 +28,9 @@ from ..solver import AlternatingSolver, SolverConfig
 from ..structure import Cu111StructureBuilder
 
 
-def nondim_stress_to_gpa(stress_nd: np.ndarray, c11_GPa: float = 168.4) -> np.ndarray:
-    """Convert nondimensional stress (σ* = σ/168.4 GPa) back to GPa."""
-    return stress_nd * c11_GPa
+def nondim_stress_to_gpa(stress_nd: np.ndarray, stress_ref_gpa: float = 168.4) -> np.ndarray:
+    """Convert nondimensional stress (σ* = σ/stress_ref) back to GPa."""
+    return stress_nd * float(stress_ref_gpa)
 
 
 def _sanitize_task(name: str) -> str:
@@ -118,6 +118,10 @@ def run_virtual_cycles(
     crack_length_axis: int = 0,             # 裂纹长度统计轴
     cycle_points: int | None = None,        # 每个完整循环的离散点数（覆盖 segment_steps）
     max_strain_step: float | None = None,   # 单步应变增量上限（用于大应变幅稳定积分）
+    adaptive_substep_retry: bool = True,    # 机械步拒绝时自动二分子步重试
+    adaptive_substep_max_splits: int = 8,   # 单个名义步最大二分次数
+    adaptive_substep_min_increment: float = 1e-8,  # 最小可尝试应变增量
+    stress_ref_gpa: float = 168.4,          # 无量纲应力转物理量的参考应力
     orientation_vector: tuple[float, float, float] = (1.0, 1.0, 1.0),  # 单晶取向，默认 [111]
     random_seed: int = 42,                  # 随机种子（结构噪声/缺陷播种与初始化）
     grid_shape: tuple[int, int, int] | None = None,
@@ -574,6 +578,8 @@ def run_virtual_cycles(
         "max_abs_stress_vm": 0.0,
         "max_crack": 0.0,
         "max_abs_displacement": 0.0,
+        "adaptive_split_steps": 0,
+        "adaptive_split_failed_steps": 0,
     }
 
     # 2. 循环加载
@@ -612,7 +618,163 @@ def run_virtual_cycles(
         plastic_min, plastic_max = np.inf, -np.inf
         cycle_rss_peak = -np.inf
         cycle_rss_peak_signed = 0.0
-        
+        macro = (current_strain, -poisson_ratio * current_strain, -poisson_ratio * current_strain)
+        cycle_failed = False
+
+        def _record_substep(
+            step_diag: dict,
+            step_idx: int,
+            local_steps_now: int,
+            macro_now: tuple[float, float, float],
+            step_committed: bool,
+        ) -> None:
+            nonlocal frame_id, plastic_min, plastic_max, cycle_rss_peak, cycle_rss_peak_signed, current_strain
+            solver_diag["step_count"] += 1
+            solver_diag["mechanical_cg_failures"] += int(step_diag.get("mechanical_cg_failures", 0))
+            solver_diag["mechanical_runtime_warning_count"] += int(
+                step_diag.get("mechanical_runtime_warning_count", 0)
+            )
+            mech_last_info = int(step_diag.get("mechanical_last_cg_info", 0))
+            if mech_last_info != 0:
+                solver_diag["mechanical_nonzero_info_steps"] += 1
+            if mech_last_info < 0:
+                solver_diag["mechanical_breakdown_steps"] += 1
+            if mech_last_info > 0:
+                solver_diag["mechanical_positive_info_steps"] += 1
+            if bool(step_diag.get("mechanical_gmres_fallback_used", False)):
+                solver_diag["mechanical_gmres_fallback_steps"] += 1
+            if str(step_diag.get("mechanical_last_solver_used", "cg")) == "hold":
+                solver_diag["mechanical_hold_steps"] += 1
+            if bool(step_diag.get("mechanical_solution_clipped", False)):
+                solver_diag["mechanical_solution_clipped_steps"] += 1
+            if not bool(step_diag.get("mechanical_last_accepted", True)):
+                solver_diag["mechanical_not_accepted_steps"] += 1
+            rel_res = float(step_diag.get("mechanical_last_rel_residual", 0.0))
+            if not np.isfinite(rel_res):
+                solver_diag["mechanical_rel_residual_nonfinite_steps"] += 1
+            else:
+                solver_diag["mechanical_rel_residual_max"] = max(
+                    float(solver_diag["mechanical_rel_residual_max"]),
+                    rel_res,
+                )
+            solver_diag["coupling_inner_iterations_sum"] += int(
+                step_diag.get("coupling_inner_iterations_used", 0)
+            )
+            if not bool(step_diag.get("coupling_converged", True)):
+                solver_diag["coupling_not_converged_steps"] += 1
+            solver_diag["coupling_plastic_residual_max"] = max(
+                float(solver_diag["coupling_plastic_residual_max"]),
+                float(step_diag.get("coupling_plastic_residual", 0.0)),
+            )
+            solver_diag["coupling_stress_residual_max"] = max(
+                float(solver_diag["coupling_stress_residual_max"]),
+                float(step_diag.get("coupling_stress_residual", 0.0)),
+            )
+            if bool(step_diag.get("post_crack_mech_correction_used", False)):
+                solver_diag["post_crack_mech_correction_steps"] += 1
+            if not bool(step_diag.get("mechanical_outer_converged", True)):
+                solver_diag["mechanical_outer_not_converged_steps"] += 1
+            if int(step_diag.get("crack_cg_info", 0)) != 0:
+                solver_diag["crack_cg_nonconverged_steps"] += 1
+            if not bool(step_diag.get("crack_cg_accepted", True)):
+                solver_diag["crack_cg_not_accepted_steps"] += 1
+            solver_diag["nonfinite_count"] += int(step_diag.get("nonfinite_count", 0))
+            solver_diag["max_abs_stress_vm"] = max(
+                float(solver_diag["max_abs_stress_vm"]),
+                float(step_diag.get("max_abs_stress_vm", 0.0)),
+            )
+            solver_diag["max_crack"] = max(
+                float(solver_diag["max_crack"]),
+                float(step_diag.get("max_crack", 0.0)),
+            )
+            solver_diag["max_abs_displacement"] = max(
+                float(solver_diag["max_abs_displacement"]),
+                float(step_diag.get("max_abs_displacement", 0.0)),
+            )
+            if not step_committed:
+                return
+            plast_inst = solver.state.get("plastic_inst", solver.state["plastic"])
+            plast_inst_mean = plast_inst.mean()
+            accum_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
+            plastic_min = min(plastic_min, plast_inst_mean)
+            plastic_max = max(plastic_max, plast_inst_mean)
+            stress_tensor = solver.state["stress"]
+            stress_mean = np.mean(stress_tensor, axis=(0, 1, 2))
+            stress_vm_mean = float(np.mean(solver.state.get("stress_vm", 0.0)))
+            rss_max, _, _, _, rss_signed_max = coupling.compute_rss(
+                stress_tensor,
+                backstress=solver.state.get("backstress"),
+                slip_backstress=solver.state.get("chi_s"),
+                slip_backstress2=solver.state.get("chi_s2"),
+                return_signed_max=True,
+                orientation=structure.orientation,
+            )
+            cycle_rss_peak = max(cycle_rss_peak, float(np.mean(rss_max)))
+            cycle_rss_peak_signed = float(np.mean(rss_signed_max)) if rss_signed_max is not None else 0.0
+            stress_strain_log.append(
+                (
+                    current_strain,
+                    stress_mean[0, 0],
+                    stress_mean[1, 1],
+                    stress_mean[2, 2],
+                    stress_vm_mean,
+                    plast_inst_mean,
+                    accum_mean,
+                    float(np.mean(rss_max)),
+                    cycle_rss_peak_signed,
+                )
+            )
+
+            if print_every > 0 and step_idx % print_every == 0:
+                last_mech = step_diag.get("mechanical_last_solver_used", "cg")
+                last_rel = step_diag.get("mechanical_last_rel_residual", 0.0)
+                last_crack = step_diag.get("crack_cg_info", 0)
+                print(
+                    f"  Cycle {cycle} Substep {step_idx}/{local_steps_now} | Strain {current_strain:.4f} | "
+                    f"mech={last_mech} rel={last_rel:.2e} crack_info={int(last_crack)}"
+                )
+
+            if vtk_every > 0 and step_idx % vtk_every == 0:
+                frame_id += 1
+                if vtk_dir:
+                    vtk_dir.mkdir(parents=True, exist_ok=True)
+                    if export_energy_fields:
+                        solver.compute_energy_fields()
+                    vtk_fields = {
+                        "crack": solver.state["crack"],
+                        "plastic": solver.state["plastic"],
+                        "plastic_inst": solver.state.get("plastic_inst"),
+                        "plastic_vec": solver.state["plastic_vec"],
+                        "psi": solver.state["psi"],
+                        "displacement": solver.state["displacement"],
+                        "stress_vm": solver.state["stress_vm"],
+                    }
+                    gnd = solver.state.get("gnd_density")
+                    if gnd is not None:
+                        vtk_fields["gnd_density"] = gnd
+                    tau_c = solver.state.get("tau_c")
+                    if tau_c is not None:
+                        vtk_fields["tau_c"] = tau_c
+                    for key in (
+                        "history",
+                        "energy_elastic",
+                        "energy_pfc",
+                        "energy_crack",
+                        "energy_total_density",
+                        "crack_driving_force",
+                        "toughness",
+                    ):
+                        value = solver.state.get(key)
+                        if value is not None:
+                            vtk_fields[key] = value
+                    write_vtk(
+                        vtk_dir / f"anim_frame_{frame_id:05d}.vtk",
+                        grid,
+                        vtk_fields,
+                        macro_strain=macro_now,
+                        deform_coordinates=True,
+                    )
+
         for target in load_segments:
             target_start = current_strain
             target_end = target
@@ -624,154 +786,64 @@ def run_virtual_cycles(
                     local_steps = max(local_steps, max(1, needed))
             for step in range(1, local_steps + 1):
                 alpha = step / local_steps
-                current_strain = target_start + (target_end - target_start) * alpha
-                macro = (current_strain, -poisson_ratio * current_strain, -poisson_ratio * current_strain)
-                energy_val = solver.step(macro)
-                step_diag = getattr(solver, "last_step_diagnostics", {})
-                solver_diag["step_count"] += 1
-                solver_diag["mechanical_cg_failures"] += int(step_diag.get("mechanical_cg_failures", 0))
-                solver_diag["mechanical_runtime_warning_count"] += int(
-                    step_diag.get("mechanical_runtime_warning_count", 0)
-                )
-                mech_last_info = int(step_diag.get("mechanical_last_cg_info", 0))
-                if mech_last_info != 0:
-                    solver_diag["mechanical_nonzero_info_steps"] += 1
-                if mech_last_info < 0:
-                    solver_diag["mechanical_breakdown_steps"] += 1
-                if mech_last_info > 0:
-                    solver_diag["mechanical_positive_info_steps"] += 1
-                if bool(step_diag.get("mechanical_gmres_fallback_used", False)):
-                    solver_diag["mechanical_gmres_fallback_steps"] += 1
-                if str(step_diag.get("mechanical_last_solver_used", "cg")) == "hold":
-                    solver_diag["mechanical_hold_steps"] += 1
-                if bool(step_diag.get("mechanical_solution_clipped", False)):
-                    solver_diag["mechanical_solution_clipped_steps"] += 1
-                if not bool(step_diag.get("mechanical_last_accepted", True)):
-                    solver_diag["mechanical_not_accepted_steps"] += 1
-                rel_res = float(step_diag.get("mechanical_last_rel_residual", 0.0))
-                if not np.isfinite(rel_res):
-                    solver_diag["mechanical_rel_residual_nonfinite_steps"] += 1
-                else:
-                    solver_diag["mechanical_rel_residual_max"] = max(
-                        float(solver_diag["mechanical_rel_residual_max"]),
-                        rel_res,
-                    )
-                solver_diag["coupling_inner_iterations_sum"] += int(
-                    step_diag.get("coupling_inner_iterations_used", 0)
-                )
-                if not bool(step_diag.get("coupling_converged", True)):
-                    solver_diag["coupling_not_converged_steps"] += 1
-                solver_diag["coupling_plastic_residual_max"] = max(
-                    float(solver_diag["coupling_plastic_residual_max"]),
-                    float(step_diag.get("coupling_plastic_residual", 0.0)),
-                )
-                solver_diag["coupling_stress_residual_max"] = max(
-                    float(solver_diag["coupling_stress_residual_max"]),
-                    float(step_diag.get("coupling_stress_residual", 0.0)),
-                )
-                if bool(step_diag.get("post_crack_mech_correction_used", False)):
-                    solver_diag["post_crack_mech_correction_steps"] += 1
-                if not bool(step_diag.get("mechanical_outer_converged", True)):
-                    solver_diag["mechanical_outer_not_converged_steps"] += 1
-                if int(step_diag.get("crack_cg_info", 0)) != 0:
-                    solver_diag["crack_cg_nonconverged_steps"] += 1
-                if not bool(step_diag.get("crack_cg_accepted", True)):
-                    solver_diag["crack_cg_not_accepted_steps"] += 1
-                solver_diag["nonfinite_count"] += int(step_diag.get("nonfinite_count", 0))
-                solver_diag["max_abs_stress_vm"] = max(
-                    float(solver_diag["max_abs_stress_vm"]),
-                    float(step_diag.get("max_abs_stress_vm", 0.0)),
-                )
-                solver_diag["max_crack"] = max(
-                    float(solver_diag["max_crack"]),
-                    float(step_diag.get("max_crack", 0.0)),
-                )
-                solver_diag["max_abs_displacement"] = max(
-                    float(solver_diag["max_abs_displacement"]),
-                    float(step_diag.get("max_abs_displacement", 0.0)),
-                )
-                plast_inst = solver.state.get("plastic_inst", solver.state["plastic"])
-                plast_inst_mean = plast_inst.mean()
-                accum_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
-                plastic_min = min(plastic_min, plast_inst_mean)
-                plastic_max = max(plastic_max, plast_inst_mean)
-                stress_tensor = solver.state["stress"]
-                stress_mean = np.mean(stress_tensor, axis=(0, 1, 2))
-                stress_vm_mean = float(np.mean(solver.state.get("stress_vm", 0.0)))
-                # RSS peak tracking (nd) per cycle
-                rss_max, _, _, _, rss_signed_max = coupling.compute_rss(
-                    stress_tensor,
-                    backstress=solver.state.get("backstress"),
-                    slip_backstress=solver.state.get("chi_s"),
-                    slip_backstress2=solver.state.get("chi_s2"),
-                    return_signed_max=True,
-                    orientation=structure.orientation,
-                )
-                cycle_rss_peak = max(cycle_rss_peak, float(np.mean(rss_max)))
-                cycle_rss_peak_signed = float(np.mean(rss_signed_max)) if rss_signed_max is not None else 0.0
-                stress_strain_log.append(
-                    (
-                        current_strain,
-                        stress_mean[0, 0],
-                        stress_mean[1, 1],
-                        stress_mean[2, 2],
-                        stress_vm_mean,
-                        plast_inst_mean,
-                        accum_mean,
-                        float(np.mean(rss_max)),
-                        cycle_rss_peak_signed,
-                    )
-                )
-
-                if print_every > 0 and step % print_every == 0:
-                    last_mech = step_diag.get("mechanical_last_solver_used", "cg")
-                    last_rel = step_diag.get("mechanical_last_rel_residual", 0.0)
-                    last_crack = step_diag.get("crack_cg_info", 0)
-                    print(
-                        f"  Cycle {cycle} Substep {step}/{local_steps} | Strain {current_strain:.4f} | "
-                        f"mech={last_mech} rel={last_rel:.2e} crack_info={int(last_crack)}"
-                    )
-
-                if vtk_every > 0 and step % vtk_every == 0:
-                    frame_id += 1
-                    if vtk_dir:
-                        vtk_dir.mkdir(parents=True, exist_ok=True)
-                        if export_energy_fields:
-                            solver.compute_energy_fields()
-                        vtk_fields = {
-                            "crack": solver.state["crack"],
-                            "plastic": solver.state["plastic"],
-                            "plastic_inst": solver.state.get("plastic_inst"),
-                            "plastic_vec": solver.state["plastic_vec"],
-                            "psi": solver.state["psi"],
-                            "displacement": solver.state["displacement"],
-                            "stress_vm": solver.state["stress_vm"],
-                        }
-                        gnd = solver.state.get("gnd_density")
-                        if gnd is not None:
-                            vtk_fields["gnd_density"] = gnd
-                        tau_c = solver.state.get("tau_c")
-                        if tau_c is not None:
-                            vtk_fields["tau_c"] = tau_c
-                        for key in (
-                            "history",
-                            "energy_elastic",
-                            "energy_pfc",
-                            "energy_crack",
-                            "energy_total_density",
-                            "crack_driving_force",
-                            "toughness",
-                        ):
-                            value = solver.state.get(key)
-                            if value is not None:
-                                vtk_fields[key] = value
-                        write_vtk(
-                            vtk_dir / f"anim_frame_{frame_id:05d}.vtk",
-                            grid,
-                            vtk_fields,
-                            macro_strain=macro,
-                            deform_coordinates=True,
+                step_target = target_start + (target_end - target_start) * alpha
+                pending_targets = [step_target]
+                split_budget = max(0, int(adaptive_substep_max_splits)) if adaptive_substep_retry else 0
+                while pending_targets:
+                    trial_target = pending_targets.pop(0)
+                    trial_increment = float(trial_target - current_strain)
+                    if abs(trial_increment) <= float(adaptive_substep_min_increment):
+                        solver_diag["adaptive_split_failed_steps"] += 1
+                        cycle_failed = True
+                        print(
+                            f"[warn] cycle={cycle} step={step} rejected due to too-small increment "
+                            f"({trial_increment:.3e})"
                         )
+                        break
+
+                    macro = (
+                        trial_target,
+                        -poisson_ratio * trial_target,
+                        -poisson_ratio * trial_target,
+                    )
+                    energy_val = solver.step(macro)
+                    step_diag = getattr(solver, "last_step_diagnostics", {})
+                    step_committed = bool(
+                        step_diag.get(
+                            "mechanical_step_state_committed",
+                            step_diag.get("mechanical_last_accepted", True),
+                        )
+                    )
+                    if step_committed:
+                        current_strain = trial_target
+                    _record_substep(step_diag, step, local_steps, macro, step_committed)
+
+                    if step_committed:
+                        continue
+                    if adaptive_substep_retry and split_budget > 0:
+                        mid_target = current_strain + 0.5 * trial_increment
+                        pending_targets.insert(0, trial_target)
+                        pending_targets.insert(0, mid_target)
+                        split_budget -= 1
+                        solver_diag["adaptive_split_steps"] += 1
+                        continue
+
+                    solver_diag["adaptive_split_failed_steps"] += 1
+                    cycle_failed = True
+                    print(
+                        f"[warn] cycle={cycle} step={step} rejected and split budget exhausted "
+                        f"(increment={trial_increment:.3e})"
+                    )
+                    break
+
+                if cycle_failed:
+                    break
+            if cycle_failed:
+                break
+
+        if cycle_failed:
+            print(f"[STOP] Cycle {cycle} terminated due to unresolved mechanical rejects.")
+            break
 
         crack_mean = solver.state["crack"].mean()
         accum_plastic_mean = solver.state.get("accum_plastic", solver.state["plastic"]).mean()
@@ -957,7 +1029,8 @@ def run_virtual_cycles(
                     rss_mean_nd = row[7]
                     rss_mean_signed_nd = row[8]
                     sig_xx_gpa, sig_yy_gpa, sig_zz_gpa, sig_vm_gpa = nondim_stress_to_gpa(
-                        np.array([sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd])
+                        np.array([sig_xx_nd, sig_yy_nd, sig_zz_nd, sig_vm_nd]),
+                        stress_ref_gpa=stress_ref_gpa,
                     )
                     fh.write(
                         f"{row[0]:.6e},{plast_inst_mean:.6e},{accum_mean:.6e},"
@@ -1002,6 +1075,9 @@ def run_virtual_cycles(
                 "max_abs_stress_vm": float(solver_diag["max_abs_stress_vm"]),
                 "max_crack": float(solver_diag["max_crack"]),
                 "max_abs_displacement": float(solver_diag["max_abs_displacement"]),
+                "adaptive_split_steps": int(solver_diag["adaptive_split_steps"]),
+                "adaptive_split_failed_steps": int(solver_diag["adaptive_split_failed_steps"]),
+                "stress_ref_gpa": float(stress_ref_gpa),
             }
         )
 

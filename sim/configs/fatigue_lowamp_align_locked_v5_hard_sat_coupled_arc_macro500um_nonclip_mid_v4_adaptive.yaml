@@ -1,0 +1,91 @@
+description: macro500um non-clip mid stable v4 (hard BC + adaptive splits)
+virtual_cycle:
+  task: fatigue_lowamp_align_locked_v5_hard_sat_coupled_arc_macro500um_nonclip_mid_v4_adaptive
+  auto_output: false
+  cycles: 6
+  max_strain: 0.004
+  cycle_points: 48
+  print_interval: 6
+  vtk_interval: 9999
+  orientation_vector: [-1.0, 1.0, 1.0]
+  schmid_mode: crystal_loading_axis
+  schmid_crystal_loading_axis: [1.0, 1.0, 1.0]
+  load_axis_sample: [1.0, 0.0, 0.0]
+
+  # ~529 um x 253 um x 69 um
+  grid_shape: [24, 12, 4]
+  grid_spacing: [2.3e-5, 2.3e-5, 2.3e-5]
+  grid_periodic: [false, false, false]
+
+  # Narrow and shallow arc notch
+  arc_notch:
+    center: [2.65e-4, 3.55e-4]
+    radius: 3.8e-4
+    surface: y_max
+    x_range: [2.45e-4, 2.85e-4]
+    z_range: [0.0, 6.9e-5]
+    crack_value: 0.50
+    min_cells_x: 2
+  arc_notch_min_cells_x: 2
+
+  pfc_active: true
+  gnd_active: true
+  gnd_burgers: 1.0
+  h_gnd: 2.0e-5
+  toughness_scale: 1.3
+  crack_relax: 0.05
+
+  mech_unilateral: false
+  mech_nondim_kinematics: false
+  mech_displacement_bc_x: true
+  mech_displacement_bc_hard: false
+  mech_displacement_bc_anchor_lateral: true
+  mech_displacement_bc_penalty: 20.0
+  mech_preconditioner: jacobi
+  mech_max_iters: 80
+  mech_outer_max_iters: 1
+  mech_tol: 5.0e-6
+  mech_outer_tol: 1.0e-5
+  mech_regularization: 120.0
+  mech_solution_abs_limit: 1.0
+  mech_clip_solution_on_limit: false
+  mech_accept_rel_residual: 2.0e-1
+  mech_accept_incomplete_cg: true
+  mech_accept_incomplete_without_residual: true
+  mech_enable_gmres_fallback: true
+  mech_gmres_restart: 30
+  mech_gmres_maxiter: 60
+
+  crack_max_iters: 200
+  crack_length_threshold: 0.995
+  failure_threshold: 0.999
+
+  coupling_inner_iters: 1
+  coupling_min_iters: 1
+  coupling_tol: 3.0e-3
+  coupling_stress_tol: 2.0e-3
+  post_crack_mech_correction: true
+
+  adaptive_substep_retry: true
+  adaptive_substep_max_splits: 12
+  adaptive_substep_min_increment: 1.0e-10
+  max_strain_step: 1.0e-3
+  stress_ref_gpa: 168.4
+
+  c11: 0.58
+  c12: 0.418122
+  c44: 0.259666
+  yield_tau: 8.5e-5
+  flow_scale: 1.0e-3
+  gamma0: 8.0e-3
+  slip_exponent: 12.0
+  visco_exponent: 3.0
+  plastic_relax: 0.1
+  linear_hardening: 1.2e-4
+  h_iso: 1.2e-4
+  yield_tau_inf: 6.0e-4
+  h0_iso: 6.0e-3
+  kin_c: 0.022
+  kin_d: 10.0
+  kin_c2: 0.0025
+  kin_d2: 1.0

@@ -34,6 +34,7 @@ PATH_KEYS = {
 }
 TUPLE_KEYS = {
     "orientation_vector",
+    "max_strain_schedule",
     "grid_shape",
     "grid_spacing",
     "grid_periodic",
@@ -44,12 +45,17 @@ FLOAT_KEYS = {
     "mech_accept_rel_residual",
     "mech_preconditioner_floor",
     "mech_preconditioner_g_min",
+    "mech_displacement_bc_penalty",
     "crack_tol",
     "crack_accept_rel_residual",
     "max_strain",
+    "max_strain_step",
+    "adaptive_substep_min_increment",
     "min_strain",
     "crack_relax",
     "plastic_relax",
+    "coupling_tol",
+    "coupling_stress_tol",
     "toughness_scale",
     "stress_mu_weight",
     "notch_crack_value",
@@ -61,10 +67,17 @@ FLOAT_KEYS = {
     "gamma0",
     "slip_exponent",
     "h_iso",
+    "yield_tau_inf",
+    "h0_iso",
     "h_gnd",
+    "kin_c",
+    "kin_d",
+    "kin_c2",
+    "kin_d2",
     "c11",
     "c12",
     "c44",
+    "stress_ref_gpa",
 }
 INT_KEYS = {
     "segment_steps",
@@ -78,6 +91,10 @@ INT_KEYS = {
     "print_interval",
     "vtk_interval",
     "pfc_fft_threads",
+    "coupling_inner_iters",
+    "coupling_min_iters",
+    "arc_notch_min_cells_x",
+    "adaptive_substep_max_splits",
 }
 def _is_finite_tree(value: Any) -> bool:
     if isinstance(value, dict):
@@ -225,6 +242,9 @@ def main() -> int:
     t0 = datetime.now()
     run_cfg = dict(cfg)
     run_cfg.pop("diagnostics_out", None)
+    run_cfg.pop("schmid_mode", None)
+    run_cfg.pop("schmid_crystal_loading_axis", None)
+    run_cfg.pop("load_axis_sample", None)
     diagnostics: dict[str, float | int | bool] = {}
     results = []
     paris_coeff = 0.0
